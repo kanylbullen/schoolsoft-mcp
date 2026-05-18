@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Tooling
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Captured HTML fixtures that may contain personal data
+tests/fixtures/private/
+*.local.html
+
+# Endpoint discovery + probed JSON samples — contain real names, grades,
+# messages, school slug, and auth-only paths. Strictly local.
+discovery/
+
+# phase.dev local artifacts. .phase.json contains per-user app/env IDs
+# — don't commit it for an OSS project; users run `phase init` themselves.
+.phase.json
+.phase-cache/
+.phase-secrets/

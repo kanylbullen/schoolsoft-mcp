@@ -1,0 +1,381 @@
+"""FastMCP server exposing SchoolSoft data as tools."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
+
+from .client import SchoolSoftAuthError, SchoolSoftClient, SchoolSoftConnectionError
+from .config import ConfigError, Settings
+from .models import (
+    AttachmentBytes,
+    AttachmentText,
+    AttendanceReport,
+    ChildList,
+    HomeworkList,
+    LunchWeek,
+    MessageList,
+    NewsFeed,
+    NewsItem,
+    ScheduleWeek,
+)
+from .parsers.attachments import (
+    build_download_path,
+    extract_text,
+    filename_from_headers,
+    guess_content_type,
+)
+from .parsers.attendance import ATTENDANCE_PATHS, parse_attendance
+from .parsers.children import parse_parent_header
+from .parsers.homework import HOMEWORK_PATHS, parse_homework
+from .parsers.lunch import LUNCH_PATH, parse_lunch
+from .parsers.news import MESSAGES_PATHS, NEWS_PATHS, parse_messages, parse_news
+from .parsers.schedule import SCHEDULE_PATHS, parse_schedule
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class AppContext:
+    settings: Settings
+    client: SchoolSoftClient
+    lock: asyncio.Lock
+
+
+def _build_client(settings: Settings) -> SchoolSoftClient:
+    return SchoolSoftClient(
+        school=settings.school,
+        username=settings.username,
+        password=settings.password,
+        usertype=settings.usertype,
+        base_url=settings.base_url,
+        timeout=settings.request_timeout,
+    )
+
+
+@asynccontextmanager
+async def _lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
+    settings = Settings.from_env()
+    client = _build_client(settings)
+    ctx = AppContext(settings=settings, client=client, lock=asyncio.Lock())
+    try:
+        yield ctx
+    finally:
+        await client.close()
+
+
+mcp: FastMCP = FastMCP("schoolsoft", lifespan=_lifespan)
+
+
+def _app(ctx: Context[Any, AppContext, Any]) -> AppContext:
+    return ctx.request_context.lifespan_context
+
+
+async def _fetch_first(
+    client: SchoolSoftClient,
+    paths: tuple[str, ...],
+    params: dict[str, str] | None = None,
+) -> str:
+    """Try each path until one returns HTML; raise the last error if all fail."""
+    last_error: Exception | None = None
+    for path in paths:
+        try:
+            return await client.fetch_html(path, params=params)
+        except (SchoolSoftConnectionError, SchoolSoftAuthError) as err:
+            last_error = err
+            logger.debug("Path %s failed: %s", path, err)
+    assert last_error is not None
+    raise last_error
+
+
+@mcp.tool()
+async def list_children(ctx: Context[Any, AppContext, Any]) -> ChildList:
+    """List the children attached to this parent account.
+
+    Returns one ``Child`` per kid with their ``student_id``, name, school/grade
+    label, and an ``active`` flag for the one currently selected in
+    SchoolSoft's session. Call this first if you have multiple children — the
+    SchoolSoft session has exactly one "active" child at a time, and tools
+    like ``get_schedule`` / ``get_lunch_menu`` return data for whichever
+    child is currently active. Switch with ``set_active_child``.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        payload = await app.client.fetch_json("rest-api/parent/header/parent")
+    return parse_parent_header(payload, school=app.settings.school)
+
+
+@mcp.tool()
+async def set_active_child(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int,
+    org_id: int = 1,
+) -> ChildList:
+    """Make ``student_id`` the active child in SchoolSoft's session.
+
+    Subsequent calls to schedule / lunch / homework / planning return data
+    for this child until ``set_active_child`` is called again or the session
+    expires. ``org_id`` is the school org ID — almost always 1 for a single-
+    school account. Returns the refreshed child list (with the new active
+    flag) so the caller can confirm the switch.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await app.client.fetch_json(
+            "rest-api/parent/header/parent",
+            method="PUT",
+            params={"childId": str(student_id), "orgId": str(org_id)},
+        )
+        payload = await app.client.fetch_json("rest-api/parent/header/parent")
+    return parse_parent_header(payload, school=app.settings.school)
+
+
+@mcp.tool()
+async def dump_json(
+    ctx: Context[Any, AppContext, Any],
+    path: str,
+    method: str = "GET",
+) -> Any:
+    """Fetch a ``rest-api/*`` endpoint and return the raw parsed JSON.
+
+    Companion to ``dump_page`` for debugging the REST surface. Use sparingly
+    — responses include personal data (names, grades, message content) and
+    will be sent to whatever LLM is reading this tool's output. Sanitise
+    before sharing publicly.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        return await app.client.fetch_json(path, method=method.upper())
+
+
+@mcp.tool()
+async def get_lunch_menu(
+    ctx: Context[Any, AppContext, Any],
+    week: int | None = None,
+) -> LunchWeek:
+    """Return the lunch menu for the given ISO week (defaults to current week)."""
+    app = _app(ctx)
+    params = {"requestid": str(week)} if week is not None else None
+    async with app.lock:
+        html = await app.client.fetch_html(LUNCH_PATH, params=params)
+    return parse_lunch(html, school=app.settings.school, requested_week=week)
+
+
+@mcp.tool()
+async def get_schedule(
+    ctx: Context[Any, AppContext, Any],
+    week: int | None = None,
+) -> ScheduleWeek:
+    """Return the schedule for the given ISO week (defaults to current week).
+
+    EXPERIMENTAL: SchoolSoft schedules are often JS-rendered; the parser is
+    best-effort and may return an empty list with a note explaining what to do.
+    """
+    app = _app(ctx)
+    params = {"requestid": str(week)} if week is not None else None
+    async with app.lock:
+        html = await _fetch_first(app.client, SCHEDULE_PATHS, params=params)
+    return parse_schedule(html, school=app.settings.school, requested_week=week)
+
+
+@mcp.tool()
+async def get_homework(ctx: Context[Any, AppContext, Any]) -> HomeworkList:
+    """Return current/upcoming homework assignments (EXPERIMENTAL)."""
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, HOMEWORK_PATHS)
+    return parse_homework(html, school=app.settings.school)
+
+
+@mcp.tool()
+async def get_attendance(ctx: Context[Any, AppContext, Any]) -> AttendanceReport:
+    """Return the attendance / frånvaro overview (EXPERIMENTAL)."""
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, ATTENDANCE_PATHS)
+    return parse_attendance(html, school=app.settings.school)
+
+
+@mcp.tool()
+async def get_news(
+    ctx: Context[Any, AppContext, Any],
+    older: bool = False,
+) -> NewsFeed:
+    """Return news items including 'veckobrev'. Set ``older=True`` for archived items.
+
+    Each item carries a ``news_id`` and ``type_id`` you can pass to
+    ``get_news_item`` for the full body + attachments, or use the attachment
+    ``fileid`` directly with ``download_attachment`` / ``read_attachment_text``.
+    """
+    app = _app(ctx)
+    params = {"type": "2"} if older else None
+    async with app.lock:
+        html = await _fetch_first(app.client, NEWS_PATHS, params=params)
+    return parse_news(
+        html,
+        school=app.settings.school,
+        default_type_id=2 if older else 1,
+    )
+
+
+@mcp.tool()
+async def get_news_item(
+    ctx: Context[Any, AppContext, Any],
+    news_id: int,
+    type_id: int = 1,
+) -> NewsItem:
+    """Fetch one news item with the full body and attachments.
+
+    ``news_id`` comes from get_news().items[*].news_id. ``type_id`` is 1 for
+    current items, 2 for older — usually matches the item you got from get_news.
+    """
+    app = _app(ctx)
+    params = {
+        "requestid": str(news_id),
+        "type": str(type_id),
+        "action": "view",
+    }
+    async with app.lock:
+        html = await app.client.fetch_html(
+            "jsp/student/right_student_news.jsp", params=params
+        )
+    feed = parse_news(html, school=app.settings.school, default_type_id=type_id)
+    for item in feed.items:
+        if item.news_id == news_id:
+            return item
+    # Detail view didn't yield the expected item — return whatever we got
+    # so the caller can still see the (possibly truncated) page contents.
+    if feed.items:
+        return feed.items[0]
+    return NewsItem(
+        news_id=news_id,
+        type_id=type_id,
+        body="",
+        date="",
+    )
+
+
+@mcp.tool()
+async def download_attachment(
+    ctx: Context[Any, AppContext, Any],
+    news_id: int,
+    fileid: int,
+    type_id: int = 1,
+    object_kind: str = "news",
+) -> AttachmentBytes:
+    """Download a news/message attachment as base64-encoded bytes.
+
+    Prefer ``read_attachment_text`` if you just want to read a PDF or Word
+    document — it returns plain text and is far cheaper for the LLM context.
+    Use this tool only when you need the raw file (e.g. to save to disk).
+
+    ``object_kind`` is ``"news"`` for veckobrev / news attachments and
+    ``"message"`` for inbox messages. ``type_id`` matches the news item's
+    type field (1 = current, 2 = older).
+    """
+    if object_kind not in {"news", "message"}:
+        raise ValueError("object_kind must be 'news' or 'message'")
+    app = _app(ctx)
+    path, params = build_download_path(
+        parent_id=news_id, type_id=type_id, fileid=fileid, object_kind=object_kind
+    )
+    async with app.lock:
+        content, headers = await app.client.fetch_bytes(path, params=params)
+    fallback_name = f"attachment_{fileid}"
+    filename = filename_from_headers(headers, fallback_name)
+    content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
+    return AttachmentBytes(
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(content),
+        data_base64=base64.b64encode(content).decode("ascii"),
+    )
+
+
+@mcp.tool()
+async def read_attachment_text(
+    ctx: Context[Any, AppContext, Any],
+    news_id: int,
+    fileid: int,
+    type_id: int = 1,
+    object_kind: str = "news",
+    max_chars: int = 50_000,
+) -> AttachmentText:
+    """Download an attachment and return its extracted plain text.
+
+    Supports PDF, .docx, and plain-text files. For other content types the
+    ``note`` field explains what to do; use ``download_attachment`` instead.
+
+    This is the right tool for "vad står det i veckobrevet?" — much cheaper
+    than passing raw base64 bytes to the LLM.
+    """
+    if object_kind not in {"news", "message"}:
+        raise ValueError("object_kind must be 'news' or 'message'")
+    app = _app(ctx)
+    path, params = build_download_path(
+        parent_id=news_id, type_id=type_id, fileid=fileid, object_kind=object_kind
+    )
+    async with app.lock:
+        content, headers = await app.client.fetch_bytes(path, params=params)
+    fallback_name = f"attachment_{fileid}"
+    filename = filename_from_headers(headers, fallback_name)
+    content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
+    text, truncated, note = extract_text(content, content_type, limit=max_chars)
+    return AttachmentText(
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(content),
+        text=text,
+        truncated=truncated,
+        note=note,
+    )
+
+
+@mcp.tool()
+async def get_messages(ctx: Context[Any, AppContext, Any]) -> MessageList:
+    """Return inbox messages (EXPERIMENTAL)."""
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, MESSAGES_PATHS)
+    return parse_messages(html, school=app.settings.school)
+
+
+@mcp.tool()
+async def dump_page(
+    ctx: Context[Any, AppContext, Any],
+    path: str,
+    max_bytes: int = 50_000,
+) -> str:
+    """Fetch the raw HTML of a SchoolSoft path (for debugging parsers).
+
+    The path is relative to the school root, e.g.
+    ``jsp/student/right_student_homework.jsp``. Output is truncated to
+    ``max_bytes`` characters. Strip personal data before sharing publicly.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        html = await app.client.fetch_html(path)
+    if len(html) > max_bytes:
+        return html[:max_bytes] + f"\n\n... [truncated, total {len(html)} chars]"
+    return html
+
+
+def run() -> None:
+    """Entry point: validate config and run the MCP server over stdio."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        Settings.from_env()
+    except ConfigError as err:
+        raise SystemExit(f"Configuration error: {err}") from err
+
+    mcp.run()
