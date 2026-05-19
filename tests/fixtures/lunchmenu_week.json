@@ -1,0 +1,42 @@
+[
+  {
+    "dayId": 1,
+    "dishes": [
+      {
+        "dishType": "Dagens lunch",
+        "dish": "Chili con carne serveras med ris\r\n\r\nVegetarisk\r\nChili sine carne serveras med ris\r\n"
+      }
+    ]
+  },
+  {
+    "dayId": 2,
+    "dishes": [
+      {
+        "dishType": "Dagens lunch",
+        "dish": "Pannkakor med sylt och grädde\r\n\r\nVegetariskt\r\nPannkakor med sylt och grädde\r\n"
+      }
+    ]
+  },
+  {
+    "dayId": 3,
+    "dishes": []
+  },
+  {
+    "dayId": 4,
+    "dishes": [
+      {
+        "dishType": "Dagens lunch",
+        "dish": "Endast huvudrätt utan vegoalternativ\r\n"
+      }
+    ]
+  },
+  {
+    "dayId": 5,
+    "dishes": [
+      {
+        "dishType": "Dagens lunch",
+        "dish": "Korv med makaroner serveras med ketchup\r\n\r\nVegetariskt\r\nKorv med makaroner serveras med ketchup\r\n\r\n"
+      }
+    ]
+  }
+]

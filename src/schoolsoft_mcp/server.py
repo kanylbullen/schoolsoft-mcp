@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
+import httpx
 from mcp.server.fastmcp import Context, FastMCP
 
 from .client import SchoolSoftAuthError, SchoolSoftClient, SchoolSoftConnectionError
@@ -43,7 +44,12 @@ from .parsers.attendance import (
 )
 from .parsers.children import parse_parent_header
 from .parsers.homework import HOMEWORK_PATHS, parse_homework
-from .parsers.lunch import LUNCH_PATH, parse_lunch
+from .parsers.lunch import (
+    LUNCH_PATH,
+    LUNCH_REST_PATH_TEMPLATE,
+    parse_lunch,
+    parse_lunch_json,
+)
 from .parsers.news import MESSAGES_PATHS, NEWS_PATHS, parse_messages, parse_news
 from .parsers.schedule import SCHEDULE_PATHS, parse_schedule
 
@@ -195,12 +201,37 @@ async def get_lunch_menu(
     ctx: Context[Any, AppContext, Any],
     week: int | None = None,
 ) -> LunchWeek:
-    """Return the lunch menu for the given ISO week (defaults to current week)."""
+    """Return the lunch menu for the given ISO week (defaults to current week).
+
+    Uses SchoolSoft's modern JSON REST endpoint when available and falls
+    back to the legacy JSP page if the REST call fails (older installs).
+    """
     app = _app(ctx)
-    params = {"requestid": str(week)} if week is not None else None
+    actual_week = week if week is not None else _now_as_of().iso_week
+    rest_path = LUNCH_REST_PATH_TEMPLATE.format(week=actual_week)
+
     async with app.lock:
-        html = await app.client.fetch_html(LUNCH_PATH, params=params)
-    return _stamp(parse_lunch(html, school=app.settings.school, requested_week=week))
+        try:
+            payload = await app.client.fetch_json(rest_path)
+        except (
+            SchoolSoftConnectionError,
+            SchoolSoftAuthError,
+            httpx.HTTPStatusError,
+        ) as err:
+            logger.debug("Lunch REST failed (%s), falling back to JSP", err)
+            params = {"requestid": str(actual_week)}
+            html = await app.client.fetch_html(LUNCH_PATH, params=params)
+            return _stamp(
+                parse_lunch(
+                    html, school=app.settings.school, requested_week=actual_week
+                )
+            )
+
+    return _stamp(
+        parse_lunch_json(
+            payload, school=app.settings.school, requested_week=actual_week
+        )
+    )
 
 
 @mcp.tool()
