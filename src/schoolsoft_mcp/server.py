@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime as dt
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, TypeVar
 
 from mcp.server.fastmcp import Context, FastMCP
 
 from .client import SchoolSoftAuthError, SchoolSoftClient, SchoolSoftConnectionError
 from .config import ConfigError, Settings
 from .models import (
+    AsOf,
     AttachmentBytes,
     AttachmentText,
     AttendanceReport,
@@ -78,6 +80,33 @@ def _app(ctx: Context[Any, AppContext, Any]) -> AppContext:
     return ctx.request_context.lifespan_context
 
 
+class _HasAsOf(Protocol):
+    """Structural protocol for response models with an ``as_of`` field."""
+
+    as_of: AsOf | None
+
+
+_AsOfT = TypeVar("_AsOfT", bound=_HasAsOf)
+
+
+def _now_as_of() -> AsOf:
+    """Return the current local date packaged as :class:`AsOf`."""
+    today = dt.date.today()
+    iso_year, iso_week, _ = today.isocalendar()
+    return AsOf(date=today.isoformat(), iso_year=iso_year, iso_week=iso_week)
+
+
+def _stamp(response: _AsOfT) -> _AsOfT:
+    """Populate ``response.as_of`` with the current date.
+
+    Lets the model anchor temporal reasoning — e.g. "this veckobrev is
+    dated week 20 but mentions 'kommande vecka', and as_of says week 21,
+    so 'kommande vecka' = now".
+    """
+    response.as_of = _now_as_of()
+    return response
+
+
 async def _fetch_first(
     client: SchoolSoftClient,
     paths: tuple[str, ...],
@@ -109,7 +138,7 @@ async def list_children(ctx: Context[Any, AppContext, Any]) -> ChildList:
     app = _app(ctx)
     async with app.lock:
         payload = await app.client.fetch_json("rest-api/parent/header/parent")
-    return parse_parent_header(payload, school=app.settings.school)
+    return _stamp(parse_parent_header(payload, school=app.settings.school))
 
 
 @mcp.tool()
@@ -134,7 +163,7 @@ async def set_active_child(
             params={"childId": str(student_id), "orgId": str(org_id)},
         )
         payload = await app.client.fetch_json("rest-api/parent/header/parent")
-    return parse_parent_header(payload, school=app.settings.school)
+    return _stamp(parse_parent_header(payload, school=app.settings.school))
 
 
 @mcp.tool()
@@ -165,7 +194,7 @@ async def get_lunch_menu(
     params = {"requestid": str(week)} if week is not None else None
     async with app.lock:
         html = await app.client.fetch_html(LUNCH_PATH, params=params)
-    return parse_lunch(html, school=app.settings.school, requested_week=week)
+    return _stamp(parse_lunch(html, school=app.settings.school, requested_week=week))
 
 
 @mcp.tool()
@@ -182,7 +211,7 @@ async def get_schedule(
     params = {"requestid": str(week)} if week is not None else None
     async with app.lock:
         html = await _fetch_first(app.client, SCHEDULE_PATHS, params=params)
-    return parse_schedule(html, school=app.settings.school, requested_week=week)
+    return _stamp(parse_schedule(html, school=app.settings.school, requested_week=week))
 
 
 @mcp.tool()
@@ -191,7 +220,7 @@ async def get_homework(ctx: Context[Any, AppContext, Any]) -> HomeworkList:
     app = _app(ctx)
     async with app.lock:
         html = await _fetch_first(app.client, HOMEWORK_PATHS)
-    return parse_homework(html, school=app.settings.school)
+    return _stamp(parse_homework(html, school=app.settings.school))
 
 
 @mcp.tool()
@@ -200,7 +229,7 @@ async def get_attendance(ctx: Context[Any, AppContext, Any]) -> AttendanceReport
     app = _app(ctx)
     async with app.lock:
         html = await _fetch_first(app.client, ATTENDANCE_PATHS)
-    return parse_attendance(html, school=app.settings.school)
+    return _stamp(parse_attendance(html, school=app.settings.school))
 
 
 @mcp.tool()
@@ -218,10 +247,12 @@ async def get_news(
     params = {"type": "2"} if older else None
     async with app.lock:
         html = await _fetch_first(app.client, NEWS_PATHS, params=params)
-    return parse_news(
-        html,
-        school=app.settings.school,
-        default_type_id=2 if older else 1,
+    return _stamp(
+        parse_news(
+            html,
+            school=app.settings.school,
+            default_type_id=2 if older else 1,
+        )
     )
 
 
@@ -384,7 +415,7 @@ async def get_messages(ctx: Context[Any, AppContext, Any]) -> MessageList:
     app = _app(ctx)
     async with app.lock:
         html = await _fetch_first(app.client, MESSAGES_PATHS)
-    return parse_messages(html, school=app.settings.school)
+    return _stamp(parse_messages(html, school=app.settings.school))
 
 
 @mcp.tool()

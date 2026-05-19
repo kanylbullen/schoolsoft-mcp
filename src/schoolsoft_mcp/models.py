@@ -7,6 +7,19 @@ from pydantic import BaseModel, Field
 WEEKDAYS: tuple[str, ...] = ("monday", "tuesday", "wednesday", "thursday", "friday")
 
 
+class AsOf(BaseModel):
+    """When the response was assembled.
+
+    Lets the model anchor temporal reasoning ("the news item is dated week
+    20, today is week 21, so 'next week' in the body means *now*") without
+    having to look up the current date out-of-band.
+    """
+
+    date: str = Field(description='ISO date, e.g. "2026-05-19".')
+    iso_year: int
+    iso_week: int
+
+
 class Child(BaseModel):
     """One of the children attached to a parent account."""
 
@@ -25,6 +38,7 @@ class ChildList(BaseModel):
     children: list[Child]
     active_student_id: int | None = None
     note: str | None = None
+    as_of: AsOf | None = None
 
 
 class LunchDay(BaseModel):
@@ -37,6 +51,7 @@ class LunchWeek(BaseModel):
     year: int
     school: str
     days: list[LunchDay]
+    as_of: AsOf | None = None
 
     def as_text(self) -> str:
         lines = [f"Lunch week {self.week} ({self.year}) — {self.school}"]
@@ -89,6 +104,7 @@ class ScheduleWeek(BaseModel):
         default=None,
         description="Optional message about parser status, e.g. experimental warnings.",
     )
+    as_of: AsOf | None = None
 
 
 class HomeworkItem(BaseModel):
@@ -103,6 +119,7 @@ class HomeworkList(BaseModel):
     school: str
     items: list[HomeworkItem]
     note: str | None = None
+    as_of: AsOf | None = None
 
 
 class AttendanceEntry(BaseModel):
@@ -117,6 +134,7 @@ class AttendanceReport(BaseModel):
     school: str
     entries: list[AttendanceEntry]
     note: str | None = None
+    as_of: AsOf | None = None
 
 
 class Attachment(BaseModel):
@@ -163,6 +181,7 @@ class NewsFeed(BaseModel):
     school: str
     items: list[NewsItem]
     note: str | None = None
+    as_of: AsOf | None = None
 
 
 class Message(BaseModel):
@@ -179,6 +198,7 @@ class MessageList(BaseModel):
     school: str
     items: list[Message]
     note: str | None = None
+    as_of: AsOf | None = None
 
 
 class AttachmentBytes(BaseModel):
