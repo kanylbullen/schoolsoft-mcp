@@ -235,6 +235,23 @@ All tools accept no arguments unless noted.
   PDF (via `pypdf`), `.docx` (via `python-docx`), and plain-text files.
   The right tool for *"vad står det i veckobrevet?"*.
 
+### School information & contacts
+
+- **`get_school_info()`** — The Skolinformation page rendered as plain
+  text (school hours, phone numbers, term dates, addresses, …). The
+  page is free-form HTML so we don't impose structure — the model
+  picks out what's relevant.
+- **`get_contacts()`** — Classmate / guardian contact list for the
+  active child (Skolinfo → Kontaktlistor). Each `Contact` carries
+  name, phone (when published) and address. PII-heavy — handle with care.
+
+### Library
+
+- **`get_library_files()`** — Files shared in the school's library
+  (Filer & länkar). Each entry has the display title, clean filename,
+  optional description, size, MIME guess, the `request_id` to pass to
+  the download endpoint, and the category heading it appeared under.
+
 ### Messages
 
 - **`get_messages()`** — Inbox messages (experimental).

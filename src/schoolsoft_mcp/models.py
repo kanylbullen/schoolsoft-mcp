@@ -288,6 +288,69 @@ class GradeList(BaseModel):
     as_of: AsOf | None = None
 
 
+class SchoolInformation(BaseModel):
+    """The Skolinformation page rendered as plain text.
+
+    SchoolSoft serves this as free-form CMS-edited HTML, so we don't try
+    to impose structure beyond extracting visible text. The model can
+    pick out hours, contacts, term dates etc. from the text.
+    """
+
+    school: str
+    text: str = Field(description="Plain-text content of the page.")
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class Contact(BaseModel):
+    """A single contact entry (typically a classmate or their guardian)."""
+
+    name: str = ""
+    phone: str = Field(
+        default="",
+        description='Phone number, may include format hints like "(b)" for bostad.',
+    )
+    address: str = Field(default="", description="Postal address.")
+
+
+class ContactList(BaseModel):
+    """All contacts from one of SchoolSoft's contact pages."""
+
+    school: str
+    contacts: list[Contact]
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class LibraryFile(BaseModel):
+    """One file in the school's shared library / filer & länkar."""
+
+    title: str = Field(description="Display name as shown on the page.")
+    filename: str = Field(default="", description="Clean filename from the link's title attribute.")
+    description: str = Field(default="", description="Optional description text.")
+    size_bytes: int | None = None
+    content_type: str | None = Field(
+        default=None,
+        description="Best-effort guess from filename; the real type is "
+        "only known after fetching the file.",
+    )
+    request_id: int | None = Field(
+        default=None,
+        description="ID for the right_student_library_download.jsp?requestid= endpoint.",
+    )
+    category: str = Field(
+        default="",
+        description="Section heading the file appeared under, e.g. 'Policies', 'Blanketter'.",
+    )
+
+
+class LibraryFileList(BaseModel):
+    school: str
+    files: list[LibraryFile]
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
 class Attachment(BaseModel):
     """A file attached to a news item or message.
 

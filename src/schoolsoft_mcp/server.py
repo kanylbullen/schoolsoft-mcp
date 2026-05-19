@@ -22,14 +22,17 @@ from .models import (
     AttachmentText,
     AttendanceReport,
     ChildList,
+    ContactList,
     GradeList,
     HomeworkList,
+    LibraryFileList,
     LunchWeek,
     MessageList,
     NewsFeed,
     NewsItem,
     PlanningList,
     ScheduleWeek,
+    SchoolInformation,
     UnreportedAbsenceList,
 )
 from .parsers.attachments import (
@@ -59,6 +62,14 @@ from .parsers.lunch import (
     LUNCH_REST_PATH_TEMPLATE,
     parse_lunch,
     parse_lunch_json,
+)
+from .parsers.misc_jsp import (
+    CONTACTS_PATHS,
+    LIBRARY_PATHS,
+    SCHOOL_INFO_PATHS,
+    parse_contacts,
+    parse_library_files,
+    parse_school_info,
 )
 from .parsers.news import MESSAGES_PATHS, NEWS_PATHS, parse_messages, parse_news
 from .parsers.schedule import (
@@ -322,6 +333,54 @@ async def get_schedule(
             year=actual_year,
         )
     )
+
+
+@mcp.tool()
+async def get_school_info(
+    ctx: Context[Any, AppContext, Any],
+) -> SchoolInformation:
+    """Return the Skolinformation page as plain text.
+
+    The page is free-form CMS-edited HTML (school hours, phone numbers,
+    term dates, addresses, …), so we don't try to impose structure —
+    just extract the visible text and let the caller interpret it.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, SCHOOL_INFO_PATHS)
+    return _stamp(parse_school_info(html, school=app.settings.school))
+
+
+@mcp.tool()
+async def get_contacts(ctx: Context[Any, AppContext, Any]) -> ContactList:
+    """Return the class contact list for the active child.
+
+    Maps to Skolinfo → Kontaktlistor. Each :class:`Contact` carries
+    name, phone (when published), and address. Use with care — this is
+    PII the school shares between class families.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, CONTACTS_PATHS)
+    return _stamp(parse_contacts(html, school=app.settings.school))
+
+
+@mcp.tool()
+async def get_library_files(
+    ctx: Context[Any, AppContext, Any],
+) -> LibraryFileList:
+    """List files in the school's shared library / filer & länkar.
+
+    Each :class:`LibraryFile` carries the display title, clean filename,
+    optional description, size, and the ``request_id`` you'd pass to
+    ``right_student_library_download.jsp?requestid=<n>`` to fetch the
+    file. (No dedicated download MCP tool yet; use ``dump_page`` against
+    that path when you need the bytes.)
+    """
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, LIBRARY_PATHS)
+    return _stamp(parse_library_files(html, school=app.settings.school))
 
 
 @mcp.tool()
