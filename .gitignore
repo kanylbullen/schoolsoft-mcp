@@ -50,8 +50,5 @@ tests/fixtures/private/
 # messages, school slug, and auth-only paths. Strictly local.
 discovery/
 
-# phase.dev local artifacts. .phase.json contains per-user app/env IDs
-# — don't commit it for an OSS project; users run `phase init` themselves.
+# Local secrets-manager configs (per-user, may include workspace IDs).
 .phase.json
-.phase-cache/
-.phase-secrets/

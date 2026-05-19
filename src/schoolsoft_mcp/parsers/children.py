@@ -7,16 +7,16 @@ Observed shape of ``/rest-api/parent/header/parent``::
       "lastName": "...",
       "children": [
         {
-          "id": 999,
+          "id": <int>,
           "firstName": "...",
           "lastName": "...",
-          "schools": [{"orgId": 1, "className": "6", "schoolName": "...",
+          "schools": [{"orgId": <int>, "className": "...", "schoolName": "...",
                        "studentActive": true, "parentAllowedAccess": true}]
         },
         ...
       ],
-      "currentChildId": 999,
-      "currentOrgId": 1
+      "currentChildId": <int>,
+      "currentOrgId": <int>
     }
 
 The parser falls back to a wider set of key names so it keeps working

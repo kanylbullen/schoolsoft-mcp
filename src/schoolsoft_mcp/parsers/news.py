@@ -2,37 +2,37 @@
 
 News (incl. veckobrev) lives at ``jsp/student/right_student_news.jsp``.
 Real markup (observed 2026-05) renders every item inline on the list
-page inside a Bootstrap-style accordion::
+page inside a Bootstrap-style accordion (IDs below are illustrative)::
 
     <div class="h3_bold">VECKOBREV</div>             <!-- section heading -->
-    <div class="accordion-group" id="accordion-group88888">
+    <div class="accordion-group" id="accordion-group<NEWS_ID>">
       <div class="accordion-heading">
-        <a class="accordion-toggle" href="#collapse88888">
-          <span id="name88888">Veckobrev v 19-21 åk 6</span>
-          <div class="preview-block">Info om ...</div>
-          <div class="accordion-heading-date-wide">8 maj</div>
+        <a class="accordion-toggle" href="#collapse<NEWS_ID>">
+          <span id="name<NEWS_ID>">Veckobrev v N</span>
+          <div class="preview-block">...</div>
+          <div class="accordion-heading-date-wide">DD mån</div>
         </a>
       </div>
-      <div id="collapse88888" class="accordion-body">
-        <span id="description88888">
-          <p class="tinymce-p">Info om kommande utflykt...</p>
+      <div id="collapse<NEWS_ID>" class="accordion-body">
+        <span id="description<NEWS_ID>">
+          <p class="tinymce-p">...</p>
         </span>
         <div class="accordion_inner_right">
-          <label>Från</label><div>Alice Andersson (P)</div>
-          <label>Till</label><div>6</div>
-          <label>Publicerad</label><div>8 maj</div>
-          <label>Visa till</label><div>23 maj</div>
-          <div id="fileAttach88888">
-            <a href="right_student_file_download.jsp?requestid1=88888
-                     &requestid2=1&object=news&fileid=77777"
-               title="Veckobrev år 6 v 19-21.pdf">Veckobre...pdf</a> (141 KB)
+          <label>Från</label><div>Author Name (P)</div>
+          <label>Till</label><div>...</div>
+          <label>Publicerad</label><div>DD mån</div>
+          <label>Visa till</label><div>DD mån</div>
+          <div id="fileAttach<NEWS_ID>">
+            <a href="right_student_file_download.jsp?requestid1=<NEWS_ID>
+                     &requestid2=<TYPE_ID>&object=news&fileid=<FILE_ID>"
+               title="filename.pdf">filename.pdf</a> (NNN KB)
           </div>
         </div>
       </div>
     </div>
 
-The news_id is the suffix on every per-item id (``name88888``,
-``description88888``, ``fileAttach88888``…). The same id appears as
+The news_id is the suffix on every per-item id (``name<NEWS_ID>``,
+``description<NEWS_ID>``, ``fileAttach<NEWS_ID>``…). The same id appears as
 ``requestid1`` on attachment links. ``type_id`` = ``requestid2`` (1 for
 current, 2 for older).
 """

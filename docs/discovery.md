@@ -35,20 +35,21 @@ playwright install chromium
 Output is merged across runs by default, so the typical flow is:
 
 ```bash
-# 1. fast automatic pass (bash / zsh)
-phase run -- python scripts/discover_endpoints.py
+# Set SCHOOLSOFT_* env vars first (e.g. source a .env file).
+# 1. fast automatic pass
+python scripts/discover_endpoints.py
 
 # 2. drive the SPA yourself to capture what BFS can't reach
-DISCOVER_MODE=manual phase run -- python scripts/discover_endpoints.py
+DISCOVER_MODE=manual python scripts/discover_endpoints.py
 ```
 
 On **PowerShell** (Windows), env vars are set separately:
 
 ```powershell
-phase run -- python scripts/discover_endpoints.py
+python scripts/discover_endpoints.py
 
 $env:DISCOVER_MODE = "manual"
-phase run -- python scripts/discover_endpoints.py
+python scripts/discover_endpoints.py
 Remove-Item Env:DISCOVER_MODE     # so future runs default back to crawl
 ```
 
@@ -63,7 +64,7 @@ In step 2, click into **every feature you care about**, and especially:
 - Messages (Meddelanden) — open a thread with an attachment if you have one.
 - Homework (Läxor) and lesson planning (Planering) — flip between weeks.
 
-Without phase, set the env vars yourself:
+Without a .env file, pass the vars inline:
 
 ```bash
 SCHOOLSOFT_SCHOOL=... SCHOOLSOFT_USERNAME=... SCHOOLSOFT_PASSWORD=... \

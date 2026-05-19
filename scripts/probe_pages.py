@@ -10,8 +10,7 @@ that didn't migrate to REST (frånvaro, betyg, kontaktlistor, library, …).
 Output is gitignored — pages contain real names, grades, message bodies.
 
 Usage:
-    phase run -- python scripts/probe_pages.py
-    # or, without phase:
+    # set SCHOOLSOFT_* env vars first (or source a .env), then:
     python scripts/probe_pages.py
 
 Env vars: same as MCP server, plus:

@@ -188,7 +188,14 @@ class AttachmentBytes(BaseModel):
     content_type: str
     size_bytes: int
     data_base64: str = Field(
-        description="Raw file bytes, base64-encoded. Decode before writing to disk."
+        default="",
+        description="Raw file bytes, base64-encoded. Decode before writing to disk. "
+        "Empty when the file exceeded ``max_bytes`` — see ``note``.",
+    )
+    note: str | None = Field(
+        default=None,
+        description="Populated when the download was skipped (e.g. file too large). "
+        "Try ``read_attachment_text`` for content, or pass a larger ``max_bytes``.",
     )
 
 
@@ -200,4 +207,9 @@ class AttachmentText(BaseModel):
     size_bytes: int
     text: str
     truncated: bool = False
+    next_offset: int | None = Field(
+        default=None,
+        description="Set when ``truncated=True``. Pass as ``offset`` in the "
+        "next ``read_attachment_text`` call to continue reading.",
+    )
     note: str | None = None

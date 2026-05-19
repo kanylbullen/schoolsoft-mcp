@@ -10,8 +10,7 @@ detail strings included with each result; bodies of news items and
 attachment text are deliberately never included.
 
 Usage:
-    phase run -- python scripts/smoke_test.py
-    # or:
+    # set SCHOOLSOFT_* env vars first (or source a .env), then:
     python scripts/smoke_test.py
 """
 

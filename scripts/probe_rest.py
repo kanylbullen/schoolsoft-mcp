@@ -11,8 +11,7 @@ The output directory is gitignored (responses include real names,
 grades, message bodies, etc.).
 
 Usage:
-    phase run -- python scripts/probe_rest.py
-    # or, without phase:
+    # set SCHOOLSOFT_* env vars first (or source a .env), then:
     python scripts/probe_rest.py
 
 Env vars: same as the MCP server (SCHOOLSOFT_SCHOOL etc.) plus:

@@ -13,8 +13,7 @@ output, but the school slug will, so the resulting JSON is gitignored.
 Usage:
     pip install -e ".[discover]"
     playwright install chromium
-    phase run -- python scripts/discover_endpoints.py
-    # or, without phase:
+    # set SCHOOLSOFT_* env vars first (or source a .env), then:
     python scripts/discover_endpoints.py
 
 Env vars (same as the MCP server):

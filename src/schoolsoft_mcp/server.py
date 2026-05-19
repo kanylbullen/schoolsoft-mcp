@@ -269,12 +269,20 @@ async def download_attachment(
     fileid: int,
     type_id: int = 1,
     object_kind: str = "news",
+    max_bytes: int = 700_000,
 ) -> AttachmentBytes:
     """Download a news/message attachment as base64-encoded bytes.
 
-    Prefer ``read_attachment_text`` if you just want to read a PDF or Word
-    document — it returns plain text and is far cheaper for the LLM context.
-    Use this tool only when you need the raw file (e.g. to save to disk).
+    **For reading content, use ``read_attachment_text`` instead** — it
+    extracts plain text from PDF / .docx and is far cheaper for LLM
+    context. This tool returns raw bytes (base64) and is only useful when
+    you need the actual file (e.g. to forward it to disk-write tooling).
+
+    Refuses files larger than ``max_bytes`` (default 700 KB raw, ≈ 950 KB
+    base64) so the tool result stays under typical 1 MB MCP limits. On
+    refusal, returns an empty ``data_base64`` with the real ``size_bytes``
+    and a note suggesting ``read_attachment_text`` — the caller can then
+    extract text instead.
 
     ``object_kind`` is ``"news"`` for veckobrev / news attachments and
     ``"message"`` for inbox messages. ``type_id`` matches the news item's
@@ -291,6 +299,21 @@ async def download_attachment(
     fallback_name = f"attachment_{fileid}"
     filename = filename_from_headers(headers, fallback_name)
     content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
+
+    if len(content) > max_bytes:
+        return AttachmentBytes(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(content),
+            data_base64="",
+            note=(
+                f"File is {len(content):,} bytes — exceeds max_bytes={max_bytes:,} "
+                "to keep the tool result under the 1 MB MCP cap. Use "
+                "read_attachment_text to get extracted plain text instead, "
+                "or call again with a larger max_bytes if you really need raw bytes."
+            ),
+        )
+
     return AttachmentBytes(
         filename=filename,
         content_type=content_type,
@@ -307,14 +330,21 @@ async def read_attachment_text(
     type_id: int = 1,
     object_kind: str = "news",
     max_chars: int = 50_000,
+    offset: int = 0,
 ) -> AttachmentText:
     """Download an attachment and return its extracted plain text.
 
-    Supports PDF, .docx, and plain-text files. For other content types the
-    ``note`` field explains what to do; use ``download_attachment`` instead.
+    Supports PDF (pypdf), .docx (python-docx), and plain text. For other
+    content types the ``note`` explains what to do; use ``download_attachment``
+    when you need raw bytes.
 
-    This is the right tool for "vad står det i veckobrevet?" — much cheaper
+    This is the right tool for "vad står det i veckobrevet?" — far cheaper
     than passing raw base64 bytes to the LLM.
+
+    For long documents that won't fit in one response, call again with
+    ``offset`` advanced past the chars already received. The returned
+    ``truncated=True`` and the response's ``next_offset`` field signal more
+    content is available.
     """
     if object_kind not in {"news", "message"}:
         raise ValueError("object_kind must be 'news' or 'message'")
@@ -327,13 +357,23 @@ async def read_attachment_text(
     fallback_name = f"attachment_{fileid}"
     filename = filename_from_headers(headers, fallback_name)
     content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
-    text, truncated, note = extract_text(content, content_type, limit=max_chars)
+    # Extract enough to satisfy offset + max_chars, then slice. Keeps the
+    # parser simple (no per-format streaming) while still letting callers
+    # paginate through large documents.
+    text, truncated, note = extract_text(
+        content, content_type, limit=offset + max_chars
+    )
+    if offset > 0:
+        text = text[offset:]
+        if len(text) >= max_chars:
+            truncated = True
     return AttachmentText(
         filename=filename,
         content_type=content_type,
         size_bytes=len(content),
         text=text,
         truncated=truncated,
+        next_offset=offset + len(text) if truncated else None,
         note=note,
     )
 

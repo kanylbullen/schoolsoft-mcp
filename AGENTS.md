@@ -28,10 +28,9 @@ mypy src        # strict type-check
 CI (`.github/workflows/ci.yml`) runs the same three commands across
 Python 3.10–3.13.
 
-For secrets locally, [phase.dev](https://phase.dev) is the maintainers'
-preferred backend; the Python code knows nothing about it. See
-[docs/phase-dev.md](./docs/phase-dev.md). Anything that injects env vars
-works — `.env`, direnv, OS keychain, Claude Desktop's `env` block, etc.
+For secrets locally, the MCP server reads plain env vars — `.env`, direnv,
+OS keychain, the MCP client's `env` block, or any external secrets manager
+that can inject vars all work. There is no built-in integration.
 
 To find/verify SchoolSoft JSP paths, use the Playwright-based
 discovery script: see [docs/discovery.md](./docs/discovery.md). The

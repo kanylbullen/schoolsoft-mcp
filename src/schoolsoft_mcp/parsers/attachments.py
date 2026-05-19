@@ -18,9 +18,26 @@ import io
 import logging
 import mimetypes
 import re
+from typing import Any
 from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
+
+# Eager-import the heavy text-extraction libs at module load instead of
+# inside the per-call helpers. First call would otherwise pay the import
+# cost (plus Windows AV file-scan on the freshly-installed .pyd files),
+# which has been observed to take minutes on first use — long enough for
+# Claude Desktop to cancel the tool call. Once the server process is up,
+# subsequent calls reuse the already-imported modules.
+try:
+    from pypdf import PdfReader as _PdfReader
+except ImportError:  # pragma: no cover - optional dep
+    _PdfReader = None  # type: ignore[assignment,misc]
+
+try:
+    from docx import Document as _DocxDocument
+except ImportError:  # pragma: no cover - optional dep
+    _DocxDocument = None  # type: ignore[assignment]
 
 # Hard cap on text extraction output. LLM contexts are finite; PDFs of
 # hundreds of pages would be useless and expensive. Configurable per-call.
@@ -86,27 +103,65 @@ def extract_text(
     Supports PDF (via pypdf), .docx (via python-docx), and plain text. For
     other content types the note explains what to do (typically: use
     download_attachment to get the raw bytes).
-    """
-    ctype = content_type.split(";")[0].strip().lower()
 
-    if ctype in {"application/pdf"} or content[:4] == b"%PDF":
+    Routing is primarily by magic bytes — Content-Type is unreliable in
+    practice (SchoolSoft's redirect chain produces values like
+    ``"application/octet-stream, application/pdf"``).
+    """
+    # Magic bytes are authoritative for the binary formats we care about.
+    if content[:4] == b"%PDF":
         return _truncate(_extract_pdf(content), limit)
-    if (
-        ctype == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        or (ctype == "application/octet-stream" and content[:4] == b"PK\x03\x04")
+    if content[:4] == b"PK\x03\x04" and _looks_like_docx(content):
+        return _truncate(_extract_docx(content), limit)
+
+    # Parse all comma- and semicolon-separated content-type variants and
+    # accept the first plausible one.
+    ctypes = _parse_content_types(content_type)
+    if any(c == "application/pdf" for c in ctypes):
+        return _truncate(_extract_pdf(content), limit)
+    if any(
+        c == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        for c in ctypes
     ):
         return _truncate(_extract_docx(content), limit)
-    if ctype.startswith("text/") or ctype in {"application/json", "application/xml"}:
+    if any(c.startswith("text/") or c in {"application/json", "application/xml"} for c in ctypes):
         try:
             return _truncate(content.decode("utf-8"), limit)
         except UnicodeDecodeError:
             return _truncate(content.decode("latin-1", errors="replace"), limit)
 
     note = (
-        f"No text extractor for content-type {ctype!r}. "
+        f"No text extractor for content-type {content_type!r} "
+        f"(first {len(content[:4])} bytes: {content[:4]!r}). "
         "Use download_attachment to fetch the raw bytes."
     )
     return "", False, note
+
+
+def _parse_content_types(header: str) -> list[str]:
+    """Split a Content-Type header into its constituent MIME types.
+
+    Tolerates the comma-joined values SchoolSoft's redirect chain produces
+    (e.g. ``"application/octet-stream, application/pdf"``) as well as the
+    normal ``"text/html; charset=utf-8"`` form.
+    """
+    out: list[str] = []
+    for chunk in header.split(","):
+        primary = chunk.split(";", 1)[0].strip().lower()
+        if primary:
+            out.append(primary)
+    return out
+
+
+def _looks_like_docx(content: bytes) -> bool:
+    """Detect a .docx by peeking for ``word/`` inside the ZIP central directory.
+
+    A bare ZIP magic (``PK\\x03\\x04``) could be any Office Open XML file
+    (.xlsx, .pptx) or a plain .zip. Look for the ``word/`` entry name in
+    the first ~32 KB to be sure we hand it to python-docx.
+    """
+    head = content[: min(len(content), 32_768)]
+    return b"word/" in head
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool, str | None]:
@@ -120,16 +175,14 @@ def _truncate(text: str, limit: int) -> tuple[str, bool, str | None]:
 
 
 def _extract_pdf(content: bytes) -> str:
-    try:
-        from pypdf import PdfReader
-    except ImportError:
+    if _PdfReader is None:
         return (
             "[pypdf not installed; reinstall the package to enable PDF text "
             "extraction: pip install -e .]"
         )
 
     try:
-        reader = PdfReader(io.BytesIO(content))
+        reader = _PdfReader(io.BytesIO(content))
     except Exception as err:
         logger.warning("PDF parse failed: %s", err)
         return f"[Could not parse PDF: {err}]"
@@ -145,16 +198,14 @@ def _extract_pdf(content: bytes) -> str:
 
 
 def _extract_docx(content: bytes) -> str:
-    try:
-        from docx import Document
-    except ImportError:
+    if _DocxDocument is None:
         return (
             "[python-docx not installed; reinstall the package to enable "
             ".docx text extraction: pip install -e .]"
         )
 
     try:
-        doc = Document(io.BytesIO(content))
+        doc: Any = _DocxDocument(io.BytesIO(content))
     except Exception as err:
         logger.warning("DOCX parse failed: %s", err)
         return f"[Could not parse DOCX: {err}]"

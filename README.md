@@ -63,9 +63,11 @@ https://sms.schoolsoft.se/<SCHOOL>/jsp/Login.jsp
                           this is SCHOOLSOFT_SCHOOL
 ```
 
-A `.env.example` is included as a starting point. If you'd rather keep
-credentials out of any on-disk file, the server also works behind
-[phase.dev](https://phase.dev) — see [docs/phase-dev.md](./docs/phase-dev.md).
+A `.env.example` is included as a starting point. The recommended way to
+pass credentials to MCP clients is the client's own `env` block (see
+"Using with Claude Desktop" below) — this avoids putting a `.env` file on
+disk. Any external secrets manager works too, as long as it can inject
+the variables into the spawned MCP server process.
 
 ## Using with Claude Desktop
 
@@ -88,6 +90,75 @@ see the [MCP docs](https://modelcontextprotocol.io/quickstart/user)):
 ```
 
 Restart Claude Desktop and the SchoolSoft tools will appear.
+
+### Windows notes
+
+`schoolsoft-mcp` is installed by pip into your Python install's `Scripts/`
+directory — typically:
+
+```
+%LOCALAPPDATA%\Programs\Python\Python311\Scripts\schoolsoft-mcp.exe
+```
+
+Claude Desktop's spawned subprocess sometimes can't resolve `schoolsoft-mcp`
+through `PATH` even when it's there. If you see `'schoolsoft-mcp' is not
+recognized` or `ModuleNotFoundError: No module named 'schoolsoft_mcp'` in
+`%APPDATA%\Claude\logs\mcp-server-schoolsoft.log`, point at the absolute
+path instead:
+
+```json
+{
+  "mcpServers": {
+    "schoolsoft": {
+      "command": "C:\\Users\\you\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\schoolsoft-mcp.exe",
+      "env": { "SCHOOLSOFT_SCHOOL": "...", "SCHOOLSOFT_USERNAME": "...", "SCHOOLSOFT_PASSWORD": "..." }
+    }
+  }
+}
+```
+
+Double backslashes are required in JSON. Find your exact path with
+`(Get-Command schoolsoft-mcp).Source` in PowerShell after install.
+
+If Claude Desktop fails to start the server, kill any orphaned
+`schoolsoft-mcp.exe` processes (Task Manager → Details, or
+`Get-Process schoolsoft-mcp | Stop-Process`) before re-running `pip install`.
+
+## Using with Claude Code
+
+[Claude Code](https://claude.com/claude-code) (CLI / VS Code extension) also
+speaks MCP. From the project root or anywhere on your system:
+
+```bash
+claude mcp add schoolsoft \
+  --env SCHOOLSOFT_SCHOOL=yourschool \
+  --env SCHOOLSOFT_USERNAME=your-username \
+  --env SCHOOLSOFT_PASSWORD=your-password \
+  -- schoolsoft-mcp
+```
+
+On **Windows / PowerShell**, line continuations use a backtick:
+
+```powershell
+claude mcp add schoolsoft `
+  --env SCHOOLSOFT_SCHOOL=yourschool `
+  --env SCHOOLSOFT_USERNAME=your-username `
+  --env SCHOOLSOFT_PASSWORD=your-password `
+  -- schoolsoft-mcp
+```
+
+Or as a one-liner (no line continuations):
+
+```powershell
+claude mcp add schoolsoft --env SCHOOLSOFT_SCHOOL=yourschool --env SCHOOLSOFT_USERNAME=your-username --env SCHOOLSOFT_PASSWORD=your-password -- schoolsoft-mcp
+```
+
+Same absolute-path caveat as Claude Desktop applies if `schoolsoft-mcp` isn't
+on `PATH` in the spawned shell — pass the full `.exe` path instead of the
+bare command name.
+
+After adding, verify with `claude mcp list`. The tools become available in
+your next Claude Code session.
 
 ## Using with other MCP clients
 
@@ -179,8 +250,8 @@ while recording every network request:
 ```bash
 pip install -e ".[discover]"
 playwright install chromium
-phase run -- python scripts/discover_endpoints.py
-# or set the SCHOOLSOFT_* env vars yourself and drop `phase run --`
+# set SCHOOLSOFT_* env vars first (e.g. source a .env), then:
+python scripts/discover_endpoints.py
 ```
 
 See [docs/discovery.md](./docs/discovery.md) for output format and knobs.
