@@ -122,17 +122,57 @@ class HomeworkList(BaseModel):
     as_of: AsOf | None = None
 
 
-class AttendanceEntry(BaseModel):
-    date: str = ""
-    subject: str = ""
-    minutes: int | None = None
-    status: str = ""
-    reason: str = ""
+class AttendanceWeek(BaseModel):
+    """Per-week attendance summary as shown on Frånvaro → Rapport.
+
+    All counts are number-of-lessons. ``-`` cells in the source render as 0.
+    Percentages are floats 0.0-100.0 when SchoolSoft prints them, otherwise
+    ``None``.
+    """
+
+    week: int = Field(description="ISO week number (1-53).")
+    total_present_count: int = 0
+    total_present_percent: float | None = None
+    unreported_absence_count: int = 0
+    unreported_absence_percent: float | None = None
+    reported_absence_count: int = 0
+    reported_absence_percent: float | None = None
+    # Detailed sub-counts (some installations show fewer columns).
+    present: int = 0
+    present_other_assignment: int = Field(default=0, description="Närvaro: Annat skoluppdrag.")
+    left_lesson: int = Field(default=0, description="Närvaro: Avvek från lektion.")
+    present_preregistered: int = Field(default=0, description="Närvaro: Föranmäld frånvaro.")
+    late_arrival: int = Field(default=0, description="Närvaro: Sen ankomst.")
+    absent: int = Field(default=0, description="Frånvarande (uncategorised).")
+    preregistered: int = Field(default=0, description="Föranmäld.")
+    leave_granted: int = Field(default=0, description="Ledighetsansökan beviljad.")
 
 
 class AttendanceReport(BaseModel):
     school: str
-    entries: list[AttendanceEntry]
+    weeks: list[AttendanceWeek]
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class UnreportedAbsenceEvent(BaseModel):
+    """A single unreported-absence row from Frånvaro → Oanmäld frånvaro."""
+
+    week: int = Field(description="ISO week number.")
+    day: str = Field(default="", description='Swedish weekday name, e.g. "Onsdag".')
+    lesson: str = Field(
+        default="",
+        description='Time + subject as shown on the page, e.g. "8:30-9:20 NO".',
+    )
+    message: str = Field(
+        default="",
+        description='School-side status note, e.g. "SMS skickades", "Korrigerad anmälan".',
+    )
+
+
+class UnreportedAbsenceList(BaseModel):
+    school: str
+    events: list[UnreportedAbsenceEvent]
     note: str | None = None
     as_of: AsOf | None = None
 

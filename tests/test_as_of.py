@@ -22,7 +22,7 @@ def test_as_of_default_is_none() -> None:
     assert LunchWeek(week=21, year=2026, school="x", days=[]).as_of is None
     assert ScheduleWeek(week=21, year=2026, school="x", lessons=[]).as_of is None
     assert HomeworkList(school="x", items=[]).as_of is None
-    assert AttendanceReport(school="x", entries=[]).as_of is None
+    assert AttendanceReport(school="x", weeks=[]).as_of is None
     assert NewsFeed(school="x", items=[]).as_of is None
     assert MessageList(school="x", items=[]).as_of is None
 

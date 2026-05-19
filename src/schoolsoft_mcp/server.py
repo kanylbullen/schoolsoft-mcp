@@ -27,6 +27,7 @@ from .models import (
     NewsFeed,
     NewsItem,
     ScheduleWeek,
+    UnreportedAbsenceList,
 )
 from .parsers.attachments import (
     build_download_path,
@@ -34,7 +35,12 @@ from .parsers.attachments import (
     filename_from_headers,
     guess_content_type,
 )
-from .parsers.attendance import ATTENDANCE_PATHS, parse_attendance
+from .parsers.attendance import (
+    ATTENDANCE_PATHS,
+    UNREPORTED_ABSENCE_PATHS,
+    parse_attendance,
+    parse_unreported_absence,
+)
 from .parsers.children import parse_parent_header
 from .parsers.homework import HOMEWORK_PATHS, parse_homework
 from .parsers.lunch import LUNCH_PATH, parse_lunch
@@ -225,11 +231,35 @@ async def get_homework(ctx: Context[Any, AppContext, Any]) -> HomeworkList:
 
 @mcp.tool()
 async def get_attendance(ctx: Context[Any, AppContext, Any]) -> AttendanceReport:
-    """Return the attendance / frånvaro overview (EXPERIMENTAL)."""
+    """Return per-week attendance statistics for the active child.
+
+    Maps to Frånvaro → Rapport in the SchoolSoft UI. Each ``AttendanceWeek``
+    carries total presence percentage, unreported/reported absence counts,
+    and the detailed sub-categories (sen ankomst, föranmäld, etc.).
+    For the list of *individual* unreported absences instead, call
+    ``get_unreported_absence``.
+    """
     app = _app(ctx)
     async with app.lock:
         html = await _fetch_first(app.client, ATTENDANCE_PATHS)
     return _stamp(parse_attendance(html, school=app.settings.school))
+
+
+@mcp.tool()
+async def get_unreported_absence(
+    ctx: Context[Any, AppContext, Any],
+) -> UnreportedAbsenceList:
+    """Return unreported-absence events for the active child.
+
+    Maps to Frånvaro → Oanmäld frånvaro. Each event has the week, weekday,
+    lesson (time + subject) and a school-side status message
+    (e.g. "SMS skickades", "Korrigerad anmälan"). These are the rows that
+    typically need a parent to file an absence report.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, UNREPORTED_ABSENCE_PATHS)
+    return _stamp(parse_unreported_absence(html, school=app.settings.school))
 
 
 @mcp.tool()

@@ -186,7 +186,16 @@ All tools accept no arguments unless noted.
   and the vegetarian alternative (`"main | Veg: alt"`).
 - **`get_schedule(week?: int)`** — Lessons for the week (experimental).
 - **`get_homework()`** — Current and upcoming assignments (experimental).
-- **`get_attendance()`** — Frånvaro/attendance overview (experimental).
+
+### Attendance
+
+- **`get_attendance()`** — Per-week attendance summary for the active child
+  (Frånvaro → Rapport). Each `AttendanceWeek` carries total presence
+  percentage, unreported/reported absence counts, and sub-categories
+  (sen ankomst, föranmäld, etc.).
+- **`get_unreported_absence()`** — Unreported-absence events that typically
+  need a parent's absence report (Frånvaro → Oanmäld frånvaro). Each event
+  has week, weekday, lesson, and a school-side status message.
 
 ### News, veckobrev, and attachments
 
