@@ -22,6 +22,7 @@ from .models import (
     AttachmentText,
     AttendanceReport,
     ChildList,
+    GradeList,
     HomeworkList,
     LunchWeek,
     MessageList,
@@ -44,6 +45,7 @@ from .parsers.attendance import (
     parse_unreported_absence,
 )
 from .parsers.children import parse_parent_header
+from .parsers.grades import GRADES_PATHS, parse_grades
 from .parsers.homework import (
     HOMEWORK_PATHS,
     HOMEWORK_REST_PATH,
@@ -320,6 +322,23 @@ async def get_schedule(
             year=actual_year,
         )
     )
+
+
+@mcp.tool()
+async def get_grades(ctx: Context[Any, AppContext, Any]) -> GradeList:
+    """Return the subject-grade report for the active child.
+
+    Maps to Elevdokument → Betyg in the SchoolSoft UI. Each
+    :class:`GradeEntry` is one ``(subject, term)`` pair — there can be
+    multiple terms per subject (e.g. ``25/26 Ht``, ``25/26 Vt``).
+    Entries with no grade *and* no note are skipped to keep the
+    response compact. The ``terms`` field lists all term columns seen,
+    in source-page order.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        html = await _fetch_first(app.client, GRADES_PATHS)
+    return _stamp(parse_grades(html, school=app.settings.school))
 
 
 @mcp.tool()

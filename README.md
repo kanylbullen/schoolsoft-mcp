@@ -202,6 +202,13 @@ All tools accept no arguments unless noted.
   one piece of a larger plan with subject, date range, title and the
   parent planning ID.
 
+### Grades
+
+- **`get_grades()`** — Subject grades for the active child
+  (Elevdokument → Betyg). Returns one `GradeEntry` per `(subject, term)`
+  pair plus the list of `terms` seen. Entries with no grade and no note
+  are skipped.
+
 ### Attendance
 
 - **`get_attendance()`** — Per-week attendance summary for the active child

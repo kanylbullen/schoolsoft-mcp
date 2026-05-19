@@ -261,6 +261,33 @@ class UnreportedAbsenceList(BaseModel):
     as_of: AsOf | None = None
 
 
+class GradeEntry(BaseModel):
+    """One subject grade for one term."""
+
+    subject: str = Field(description="Subject name, e.g. 'Matematik'.")
+    term: str = Field(
+        default="",
+        description='Term label as shown in the column header, e.g. "25/26 Ht".',
+    )
+    grade: str = Field(
+        default="",
+        description="Grade letter (A-F) or whatever scale the school uses. "
+        "Empty when the cell is blank.",
+    )
+    note: str = Field(default="", description='Free-text "Notering" from the row.')
+
+
+class GradeList(BaseModel):
+    school: str
+    grades: list[GradeEntry]
+    terms: list[str] = Field(
+        default_factory=list,
+        description="All term labels seen across the table, in column order.",
+    )
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
 class Attachment(BaseModel):
     """A file attached to a news item or message.
 
