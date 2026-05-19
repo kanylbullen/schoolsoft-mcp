@@ -1,0 +1,26 @@
+[
+  {
+    "id": 3001,
+    "planningId": 4001,
+    "activityId": 2001,
+    "title": "(del 1 20/5) v.21",
+    "subTitle": "ons 20 maj Planering, Moderna språk inom ramen för språkval",
+    "read": false
+  },
+  {
+    "id": 3002,
+    "planningId": 4002,
+    "activityId": 2003,
+    "title": "Matte-planering åk 6 vt 2026",
+    "subTitle": "tors 08 jan. - tors 18 juni Planering, Matematik",
+    "read": true
+  },
+  {
+    "id": 3003,
+    "planningId": 4003,
+    "activityId": 2004,
+    "title": "NO-planering vt 2026 åk 6",
+    "subTitle": "mån 19 jan. - tis 23 juni Planering, Naturorienterande ämnen",
+    "read": true
+  }
+]

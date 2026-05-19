@@ -108,16 +108,87 @@ class ScheduleWeek(BaseModel):
 
 
 class HomeworkItem(BaseModel):
-    subject: str = ""
+    """One assignment / läxa entry as shown on the start-page list.
+
+    The REST API returns a flat ``subTitle`` like
+    ``"ons 13 maj 00:00 - ons 20 maj 00:00, Diagnos, Moderna språk"``.
+    We expose both the raw subtitle and the parsed-out parts so callers
+    can choose whichever is convenient.
+    """
+
     title: str = ""
+    subject: str = Field(default="", description="Subject name extracted from subtitle.")
+    kind: str = Field(
+        default="",
+        description='Type label from subtitle, e.g. "Diagnos", "Inlämningsuppgift".',
+    )
+    date_range: str = Field(
+        default="",
+        description="Human-readable date range from subtitle.",
+    )
+    subtitle: str = Field(default="", description="Raw subtitle text from the API.")
+    due: str | None = Field(
+        default=None,
+        description='Due date as ISO YYYY-MM-DD (parsed from REST sortDate).',
+    )
+    read: bool = False
+    submission_status: str = Field(
+        default="",
+        description='e.g. "NO_STATUS", "SUBMITTED".',
+    )
+    result_status: str = Field(
+        default="",
+        description='e.g. "NOT_REPORTED", "REPORTED".',
+    )
+    assignment_id: int | None = None
+    activity_id: int | None = None
+    # Legacy field kept for backward-compatibility with the old JSP parser.
     description: str = ""
-    due: str | None = None
     assigned: str | None = None
 
 
 class HomeworkList(BaseModel):
     school: str
     items: list[HomeworkItem]
+    week: int | None = None
+    year: int | None = None
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class PlanningPart(BaseModel):
+    """One lesson-planning entry (planeringsdel).
+
+    Closely mirrors :class:`HomeworkItem` but without
+    submission/result statuses (planeringar aren't submitted by the
+    student — they describe what the *teacher* is planning).
+    """
+
+    title: str = ""
+    subject: str = Field(default="", description="Subject name extracted from subtitle.")
+    kind: str = Field(
+        default="",
+        description='Type label, typically "Planering".',
+    )
+    date_range: str = Field(
+        default="",
+        description="Human-readable date range from subtitle.",
+    )
+    subtitle: str = Field(default="", description="Raw subtitle text from the API.")
+    read: bool = False
+    part_id: int | None = Field(default=None, description="ID of this individual part.")
+    planning_id: int | None = Field(
+        default=None,
+        description="ID of the parent planning block this part belongs to.",
+    )
+    activity_id: int | None = None
+
+
+class PlanningList(BaseModel):
+    school: str
+    items: list[PlanningPart]
+    week: int | None = None
+    year: int | None = None
     note: str | None = None
     as_of: AsOf | None = None
 

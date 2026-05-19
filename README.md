@@ -185,7 +185,16 @@ All tools accept no arguments unless noted.
   (current week by default). One entry per weekday with the main dish
   and the vegetarian alternative (`"main | Veg: alt"`).
 - **`get_schedule(week?: int)`** — Lessons for the week (experimental).
-- **`get_homework()`** — Current and upcoming assignments (experimental).
+- **`get_homework(week?: int, year?: int)`** — Assignments / läxor for
+  the given ISO week (defaults to current). Each item carries
+  `title`, `subject`, `kind` (e.g. "Diagnos", "Inlämningsuppgift"),
+  `date_range`, `due` (ISO date), `read`, `submission_status`,
+  `result_status`, and IDs. Uses the REST endpoint when available,
+  falls back to the legacy JSP scraper on non-2xx.
+- **`get_planning(week?: int, year?: int)`** — Lesson plans
+  (planeringar) for the given ISO week. Each `PlanningPart` describes
+  one piece of a larger plan with subject, date range, title and the
+  parent planning ID.
 
 ### Attendance
 

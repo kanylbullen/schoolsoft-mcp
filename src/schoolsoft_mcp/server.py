@@ -27,6 +27,7 @@ from .models import (
     MessageList,
     NewsFeed,
     NewsItem,
+    PlanningList,
     ScheduleWeek,
     UnreportedAbsenceList,
 )
@@ -43,7 +44,14 @@ from .parsers.attendance import (
     parse_unreported_absence,
 )
 from .parsers.children import parse_parent_header
-from .parsers.homework import HOMEWORK_PATHS, parse_homework
+from .parsers.homework import (
+    HOMEWORK_PATHS,
+    HOMEWORK_REST_PATH,
+    PLANNING_REST_PATH,
+    parse_homework,
+    parse_homework_json,
+    parse_planning_json,
+)
 from .parsers.lunch import (
     LUNCH_PATH,
     LUNCH_REST_PATH_TEMPLATE,
@@ -252,12 +260,67 @@ async def get_schedule(
 
 
 @mcp.tool()
-async def get_homework(ctx: Context[Any, AppContext, Any]) -> HomeworkList:
-    """Return current/upcoming homework assignments (EXPERIMENTAL)."""
+async def get_homework(
+    ctx: Context[Any, AppContext, Any],
+    week: int | None = None,
+    year: int | None = None,
+) -> HomeworkList:
+    """Return assignments / läxor for the given ISO week (defaults to current).
+
+    Uses SchoolSoft's REST endpoint when available and falls back to the
+    legacy JSP page if REST returns a non-2xx. Each item carries the raw
+    subtitle plus the parsed-out subject/kind/date_range/due.
+    """
     app = _app(ctx)
+    now = _now_as_of()
+    actual_week = week if week is not None else now.iso_week
+    actual_year = year if year is not None else now.iso_year
+    params = {"week": str(actual_week), "year": str(actual_year)}
+
     async with app.lock:
-        html = await _fetch_first(app.client, HOMEWORK_PATHS)
-    return _stamp(parse_homework(html, school=app.settings.school))
+        try:
+            payload = await app.client.fetch_json(HOMEWORK_REST_PATH, params=params)
+        except (
+            SchoolSoftConnectionError,
+            SchoolSoftAuthError,
+            httpx.HTTPStatusError,
+        ) as err:
+            logger.debug("Homework REST failed (%s), falling back to JSP", err)
+            html = await _fetch_first(app.client, HOMEWORK_PATHS)
+            return _stamp(parse_homework(html, school=app.settings.school))
+
+    return _stamp(
+        parse_homework_json(
+            payload, school=app.settings.school, week=actual_week, year=actual_year
+        )
+    )
+
+
+@mcp.tool()
+async def get_planning(
+    ctx: Context[Any, AppContext, Any],
+    week: int | None = None,
+    year: int | None = None,
+) -> PlanningList:
+    """Return lesson plans (planeringar) for the given ISO week.
+
+    Each ``PlanningPart`` is one piece of a larger planning block (a
+    teacher's plan for a course over a date range). The subtitle is
+    parsed into subject + kind + date_range, with the raw text kept too.
+    """
+    app = _app(ctx)
+    now = _now_as_of()
+    actual_week = week if week is not None else now.iso_week
+    actual_year = year if year is not None else now.iso_year
+    params = {"week": str(actual_week), "year": str(actual_year)}
+
+    async with app.lock:
+        payload = await app.client.fetch_json(PLANNING_REST_PATH, params=params)
+    return _stamp(
+        parse_planning_json(
+            payload, school=app.settings.school, week=actual_week, year=actual_year
+        )
+    )
 
 
 @mcp.tool()
