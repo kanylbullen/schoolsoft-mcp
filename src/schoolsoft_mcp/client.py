@@ -137,9 +137,11 @@ class SchoolSoftClient:
         lowercase dict (keys like ``content-type``, ``content-disposition``,
         ``content-length``).
 
-        Re-authenticates once if the first request bounces to login. Used for
-        binary file downloads (attachments) where the redirect target is a
-        short-lived signed URL under ``/files/<school>/tmp_file_*.tmp``.
+        Re-authenticates once and retries if the first request either
+        bounces to the JSP login page or returns a bare ``401`` / ``403``
+        from a REST endpoint. Used for binary file downloads
+        (attachments) where the redirect target is a short-lived signed
+        URL under ``/files/<school>/tmp_file_*.tmp``.
         """
         if not self._logged_in:
             await self.login()
@@ -154,12 +156,21 @@ class SchoolSoftClient:
             except httpx.HTTPError as err:
                 raise SchoolSoftConnectionError(f"GET {url} failed: {err}") from err
 
-            if _is_login_redirect(resp):
+            if _is_login_redirect(resp) or resp.status_code in (401, 403):
+                signal = (
+                    "login redirect"
+                    if _is_login_redirect(resp)
+                    else f"{resp.status_code} from REST"
+                )
                 if attempts_after_relogin >= 1:
                     raise SchoolSoftAuthError(
-                        "Re-authenticated but still bounced to login — giving up."
+                        f"Re-authenticated but still got {signal} for {url} — giving up."
                     )
-                logger.debug("Session expired, re-authenticating and retrying %s", url)
+                logger.debug(
+                    "Session expired (%s), re-authenticating and retrying %s",
+                    signal,
+                    url,
+                )
                 self._logged_in = False
                 await self.login()
                 attempts_after_relogin += 1
@@ -192,8 +203,10 @@ class SchoolSoftClient:
 
         The SchoolSoft React app sits in front of a JSON API at
         ``/<school>/rest-api/*``. This helper sends an ``Accept:
-        application/json`` header, re-authenticates on a login bounce just
-        like ``fetch_html``, and returns the parsed payload.
+        application/json`` header, re-authenticates on a login bounce or
+        a 401/403 (the REST endpoints don't redirect — they return bare
+        status codes when the session expires), and returns the parsed
+        payload.
         """
         if not self._logged_in:
             await self.login()
@@ -213,8 +226,12 @@ class SchoolSoftClient:
         except httpx.HTTPError as err:
             raise SchoolSoftConnectionError(f"{method_upper} {url} failed: {err}") from err
 
-        if _is_login_redirect(resp):
-            logger.debug("Session expired, re-authenticating and retrying %s", url)
+        if _is_login_redirect(resp) or resp.status_code in (401, 403):
+            logger.debug(
+                "Session expired (%s), re-authenticating and retrying %s",
+                "redirect" if _is_login_redirect(resp) else resp.status_code,
+                url,
+            )
             self._logged_in = False
             await self.login()
             try:

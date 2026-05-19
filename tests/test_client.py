@@ -65,6 +65,74 @@ async def test_fetch_html_reauths_on_session_expiry(client: SchoolSoftClient) ->
     await client.close()
 
 
+@respx.mock
+async def test_fetch_json_reauths_on_401(client: SchoolSoftClient) -> None:
+    """REST endpoints return 401 (not a redirect) when the session expires."""
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    target = respx.get(f"{BASE}/yourschool/rest-api/parent/header/parent")
+    target.side_effect = [
+        httpx.Response(401, json={"error": "Unauthorized"}),
+        httpx.Response(200, json={"children": []}),
+    ]
+
+    payload = await client.fetch_json("rest-api/parent/header/parent")
+    assert payload == {"children": []}
+    assert target.call_count == 2
+    await client.close()
+
+
+@respx.mock
+async def test_fetch_json_reauths_on_403(client: SchoolSoftClient) -> None:
+    """403 is also treated as a session-expired signal."""
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    target = respx.get(f"{BASE}/yourschool/rest-api/parent/calendar/lessons/week/21")
+    target.side_effect = [
+        httpx.Response(403, json={"error": "Forbidden"}),
+        httpx.Response(200, json=[]),
+    ]
+
+    payload = await client.fetch_json("rest-api/parent/calendar/lessons/week/21")
+    assert payload == []
+    assert target.call_count == 2
+    await client.close()
+
+
+@respx.mock
+async def test_fetch_bytes_reauths_on_401(client: SchoolSoftClient) -> None:
+    """File-download paths get the same auto-reauth treatment as fetch_json."""
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    target = respx.get(
+        f"{BASE}/yourschool/jsp/student/right_student_file_download.jsp"
+    )
+    target.side_effect = [
+        httpx.Response(401),
+        httpx.Response(200, content=b"PDF-CONTENT", headers={"content-type": "application/pdf"}),
+    ]
+
+    content, headers = await client.fetch_bytes(
+        "jsp/student/right_student_file_download.jsp"
+    )
+    assert content == b"PDF-CONTENT"
+    assert headers["content-type"] == "application/pdf"
+    assert target.call_count == 2
+    await client.close()
+
+
 def test_url_for_normalizes_paths(client: SchoolSoftClient) -> None:
     assert client.url_for("jsp/foo.jsp") == "/yourschool/jsp/foo.jsp"
     assert client.url_for("/jsp/foo.jsp") == "/yourschool/jsp/foo.jsp"
