@@ -59,7 +59,13 @@ from .parsers.lunch import (
     parse_lunch_json,
 )
 from .parsers.news import MESSAGES_PATHS, NEWS_PATHS, parse_messages, parse_news
-from .parsers.schedule import SCHEDULE_PATHS, parse_schedule
+from .parsers.schedule import (
+    SCHEDULE_PATHS,
+    SCHEDULE_REST_EVENTS_PATH_TEMPLATE,
+    SCHEDULE_REST_LESSONS_PATH_TEMPLATE,
+    parse_schedule,
+    parse_schedule_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -246,17 +252,74 @@ async def get_lunch_menu(
 async def get_schedule(
     ctx: Context[Any, AppContext, Any],
     week: int | None = None,
+    year: int | None = None,
 ) -> ScheduleWeek:
     """Return the schedule for the given ISO week (defaults to current week).
 
-    EXPERIMENTAL: SchoolSoft schedules are often JS-rendered; the parser is
-    best-effort and may return an empty list with a note explaining what to do.
+    Uses the REST endpoint when available and falls back to the legacy
+    JSP scraper on non-2xx. Lessons come with start/end times, subject,
+    teacher, room, teaching group, lesson_id (useful for cross-
+    referencing absence), and any reported per-student attendance status.
+    All-day events (sport days etc.) come from a sibling endpoint and
+    are merged into ``all_day_events``.
     """
     app = _app(ctx)
-    params = {"requestid": str(week)} if week is not None else None
+    now = _now_as_of()
+    actual_week = week if week is not None else now.iso_week
+    actual_year = year if year is not None else now.iso_year
+    lessons_path = SCHEDULE_REST_LESSONS_PATH_TEMPLATE.format(week=actual_week)
+    events_path = SCHEDULE_REST_EVENTS_PATH_TEMPLATE.format(
+        week=actual_week, year=actual_year
+    )
+
     async with app.lock:
-        html = await _fetch_first(app.client, SCHEDULE_PATHS, params=params)
-    return _stamp(parse_schedule(html, school=app.settings.school, requested_week=week))
+        try:
+            lessons_payload = await app.client.fetch_json(lessons_path)
+        except (
+            SchoolSoftConnectionError,
+            SchoolSoftAuthError,
+            httpx.HTTPStatusError,
+        ) as err:
+            logger.debug("Schedule REST failed (%s), falling back to JSP", err)
+            params = {"requestid": str(actual_week)}
+            html = await _fetch_first(app.client, SCHEDULE_PATHS, params=params)
+            return _stamp(
+                parse_schedule(
+                    html,
+                    school=app.settings.school,
+                    requested_week=actual_week,
+                    requested_year=actual_year,
+                )
+            )
+
+        # Events endpoint may legitimately return [] or 404 for weeks
+        # without any all-day items — swallow only 404 (and explicit
+        # auth/connection errors) so real 5xx failures still surface.
+        try:
+            events_payload = await app.client.fetch_json(events_path)
+        except httpx.HTTPStatusError as err:
+            if err.response.status_code == 404:
+                logger.debug("No all-day events for w%d/%d (404)", actual_week, actual_year)
+                events_payload = None
+            else:
+                logger.warning(
+                    "Schedule events fetch returned %d; continuing without",
+                    err.response.status_code,
+                )
+                events_payload = None
+        except (SchoolSoftConnectionError, SchoolSoftAuthError) as err:
+            logger.debug("Schedule events fetch failed (%s); continuing without", err)
+            events_payload = None
+
+    return _stamp(
+        parse_schedule_json(
+            lessons_payload,
+            events_payload,
+            school=app.settings.school,
+            week=actual_week,
+            year=actual_year,
+        )
+    )
 
 
 @mcp.tool()

@@ -75,6 +75,19 @@ class Lesson(BaseModel):
         default=False,
         description="True for non-academic entries like 'Rast', 'Lunch', 'promenad', 'Lunchvakt'.",
     )
+    lesson_id: int | None = Field(
+        default=None,
+        description="SchoolSoft event/lesson ID. Useful for cross-referencing absence reports.",
+    )
+    teaching_group: str = Field(
+        default="",
+        description='Group label, e.g. "6", "5,4" for multi-class lessons.',
+    )
+    color: str = Field(default="", description="Hex colour used in the SchoolSoft UI.")
+    attendance_status: str = Field(
+        default="",
+        description='Per-student status if reported, e.g. "Närvarande", "Frånvarande".',
+    )
 
 
 class AllDayEvent(BaseModel):

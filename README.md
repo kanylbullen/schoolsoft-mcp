@@ -184,7 +184,13 @@ All tools accept no arguments unless noted.
 - **`get_lunch_menu(week?: int)`** — Lunch menu for the given ISO week
   (current week by default). One entry per weekday with the main dish
   and the vegetarian alternative (`"main | Veg: alt"`).
-- **`get_schedule(week?: int)`** — Lessons for the week (experimental).
+- **`get_schedule(week?: int, year?: int)`** — Lessons for the given
+  ISO week (defaults to current). Each lesson carries start/end times,
+  subject, teacher, room, teaching group, `lesson_id`, hex `color`,
+  `attendance_status` (if reported), and `is_break` for breaks/lunch.
+  All-day events (sport days, planning bands) are merged into
+  `all_day_events`. Uses REST when available, falls back to the legacy
+  JSP scraper on non-2xx.
 - **`get_homework(week?: int, year?: int)`** — Assignments / läxor for
   the given ISO week (defaults to current). Each item carries
   `title`, `subject`, `kind` (e.g. "Diagnos", "Inlämningsuppgift"),
