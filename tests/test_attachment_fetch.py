@@ -8,6 +8,7 @@ import httpx
 import pytest
 import respx
 
+from schoolsoft_mcp import server
 from schoolsoft_mcp.client import SchoolSoftAuthError, SchoolSoftClient
 from schoolsoft_mcp.config import Settings
 from schoolsoft_mcp.server import AppContext, _fetch_attachment, _select_child
@@ -39,6 +40,14 @@ def app() -> AppContext:
         base_url=settings.base_url,
     )
     return AppContext(settings=settings, client=client, lock=asyncio.Lock())
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the retry sequence, drop the wall-clock waits."""
+    monkeypatch.setattr(
+        server, "_ATTACHMENT_RETRY_DELAYS", (0.0,) * len(server._ATTACHMENT_RETRY_DELAYS)
+    )
 
 
 def _mock_login() -> None:
@@ -171,13 +180,8 @@ async def test_refused_after_reauth_gets_the_note_too(app: AppContext) -> None:
     """A 403 never reaches us as an HTTPStatusError — it arrives as an access error."""
     _mock_login()
     news = respx.get(NEWS_URL).mock(return_value=httpx.Response(200, text="<html/>"))
-    download = respx.get(DOWNLOAD_URL)
-    download.side_effect = [
-        httpx.Response(403),  # -> re-login
-        httpx.Response(403),  # -> SchoolSoftAccessError
-        httpx.Response(403),  # retry after priming
-        httpx.Response(403),
-    ]
+    # Every attempt re-logs in and stays refused, so the count isn't fixed.
+    respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(403))
 
     content, _headers, note = await _fetch_attachment(
         app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
@@ -227,4 +231,57 @@ async def test_missing_org_id_fails_loudly(app: AppContext) -> None:
 
     assert not put.called
     assert app.client.active_child is None
+    await app.client.close()
+
+
+@respx.mock
+async def test_retries_until_the_temp_file_lands(app: AppContext) -> None:
+    """A large attachment 404s while SchoolSoft is still copying it.
+
+    Observed on a 3.9 MB PDF: the first fetch 404d, the very next one got
+    the file. One immediate retry wasn't enough, so back off and try again.
+    """
+    _mock_login()
+    respx.get(NEWS_URL).mock(return_value=httpx.Response(200, text="<html/>"))
+    download = respx.get(DOWNLOAD_URL)
+    download.side_effect = [
+        httpx.Response(404, text="Not Found"),
+        httpx.Response(404, text="Not Found"),
+        httpx.Response(404, text="Not Found"),
+        httpx.Response(
+            200, content=b"%PDF-1.4 stub", headers={"content-type": "application/pdf"}
+        ),
+    ]
+
+    content, _headers, note = await _fetch_attachment(
+        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+    )
+
+    assert content == b"%PDF-1.4 stub"
+    assert note is None
+    assert download.call_count == 4
+    await app.client.close()
+
+
+@respx.mock
+async def test_a_failed_priming_request_does_not_abort_the_retries(
+    app: AppContext,
+) -> None:
+    """Opening the news item is best-effort — the retries matter more."""
+    _mock_login()
+    respx.get(NEWS_URL).mock(return_value=httpx.Response(500, text="boom"))
+    download = respx.get(DOWNLOAD_URL)
+    download.side_effect = [
+        httpx.Response(404, text="Not Found"),
+        httpx.Response(
+            200, content=b"%PDF-1.4 stub", headers={"content-type": "application/pdf"}
+        ),
+    ]
+
+    content, _headers, note = await _fetch_attachment(
+        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+    )
+
+    assert content == b"%PDF-1.4 stub"
+    assert note is None
     await app.client.close()

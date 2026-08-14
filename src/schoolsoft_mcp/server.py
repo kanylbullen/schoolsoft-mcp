@@ -159,6 +159,13 @@ NEWS_ITEM_PATH = "jsp/student/right_student_news.jsp"
 # the login first, raising SchoolSoftAccessError if it stays refused.
 _ATTACHMENT_RETRY_STATUSES = frozenset({404})
 
+# The JSP copies the attachment to /files/<school>/tmp_file_<id>.tmp and
+# redirects to it immediately, so a large file can 404 for a second or two
+# while the copy is still landing — observed on a 3.9 MB PDF that the very
+# next call fetched fine. Every attempt re-requests the JSP, minting a new
+# signed URL rather than replaying the stale one.
+_ATTACHMENT_RETRY_DELAYS = (0.0, 1.5, 4.0)
+
 
 async def _select_child(
     app: AppContext, student_id: int | None, *, org_id: int | None = None
@@ -233,35 +240,48 @@ async def _fetch_attachment(
     except httpx.HTTPStatusError as err:
         if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
             raise
-        first_failure: Exception = err
+        last_failure: Exception = err
     except SchoolSoftAccessError as err:
         # Valid session, resource still refused — the wrong-child signature.
-        first_failure = err
+        last_failure = err
 
     if object_kind != "news":
         return b"", {}, _attachment_failure_note(
-            first_failure, news_id=news_id, fileid=fileid
+            last_failure, news_id=news_id, fileid=fileid
         )
 
     # The JSP mints a signed /files/ URL only for a file the session is
     # entitled to right now, and a browser always has the news item open
-    # when its download link is clicked. Reproduce that state, then retry
-    # once — it costs one GET and only on the failing path.
+    # when its download link is clicked. Reproduce that state before
+    # retrying — it costs one GET, and only on the failing path.
     try:
         await app.client.fetch_html(
             NEWS_ITEM_PATH,
             params={"requestid": str(news_id), "type": str(type_id), "action": "view"},
         )
-        content, headers = await app.client.fetch_bytes(path, params=params)
-        return content, headers, None
     except (
         httpx.HTTPStatusError,
         SchoolSoftConnectionError,
         SchoolSoftAccessError,
     ) as err:
-        # A plain SchoolSoftAuthError (bad credentials) is deliberately not
-        # caught — that is not something a different student_id would fix.
-        return b"", {}, _attachment_failure_note(err, news_id=news_id, fileid=fileid)
+        logger.debug("Could not open news item %s before retrying: %s", news_id, err)
+
+    for delay in _ATTACHMENT_RETRY_DELAYS:
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            content, headers = await app.client.fetch_bytes(path, params=params)
+            return content, headers, None
+        except httpx.HTTPStatusError as err:
+            if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
+                raise
+            last_failure = err
+        except (SchoolSoftConnectionError, SchoolSoftAccessError) as err:
+            # A plain SchoolSoftAuthError (bad credentials) is deliberately
+            # not caught — no student_id or delay fixes that.
+            last_failure = err
+
+    return b"", {}, _attachment_failure_note(last_failure, news_id=news_id, fileid=fileid)
 
 
 def _attachment_failure_note(err: Exception, *, news_id: int, fileid: int) -> str:
@@ -270,13 +290,16 @@ def _attachment_failure_note(err: Exception, *, news_id: int, fileid: int) -> st
         if isinstance(err, httpx.HTTPStatusError)
         else str(err)
     )
+    attempts = 1 + len(_ATTACHMENT_RETRY_DELAYS)
+    window = sum(_ATTACHMENT_RETRY_DELAYS)
     return (
-        f"Could not download fileid {fileid} of news item {news_id} ({detail}). "
-        "SchoolSoft only serves attachments belonging to the child currently "
-        "selected in the session. If this item is another child's, call "
-        "list_children() and pass that child's student_id to this tool. If the "
-        "right child is already selected, the file is missing on SchoolSoft's "
-        "file server — open the item in the web UI to confirm."
+        f"Could not download fileid {fileid} of news item {news_id} ({detail}) "
+        f"after {attempts} attempts over {window:.0f}s. SchoolSoft only serves "
+        "attachments belonging to the child currently selected in the session: "
+        "if this item is another child's, call list_children() and pass that "
+        "child's student_id to this tool. If the right child is already "
+        "selected, the file is missing on SchoolSoft's file server — open the "
+        "item in the web UI to confirm."
     )
 
 
