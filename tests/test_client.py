@@ -3,6 +3,7 @@ import pytest
 import respx
 
 from schoolsoft_mcp.client import (
+    SchoolSoftAccessError,
     SchoolSoftAuthError,
     SchoolSoftClient,
     _resolve_redirect,
@@ -253,4 +254,111 @@ async def test_select_child_rejects_a_bad_org_id(client: SchoolSoftClient) -> No
 
     with pytest.raises(SchoolSoftAuthError, match="org_id"):
         await client.select_child(4712, 1)
+    await client.close()
+
+
+@respx.mock
+async def test_rejected_selection_is_rolled_back(client: SchoolSoftClient) -> None:
+    """A refused switch must not leave the client claiming the new child.
+
+    Otherwise the next request short-circuits as "already selected" and
+    serves the previous child's data under the requested student_id.
+    """
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    put = respx.put(f"{BASE}/yourschool/rest-api/parent/header/parent")
+    put.side_effect = [
+        httpx.Response(200, json={}),
+        httpx.Response(400, json={"error": "bad orgId"}),
+    ]
+
+    await client.select_child(4711, 175)
+    with pytest.raises(SchoolSoftAuthError):
+        await client.select_child(4712, 1)
+
+    assert client.active_child == (4711, 175)
+    await client.close()
+
+
+@respx.mock
+async def test_select_child_reauths_on_an_expired_session(
+    client: SchoolSoftClient,
+) -> None:
+    """An expired session is a re-login, not a bogus "check the org_id"."""
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    put = respx.put(f"{BASE}/yourschool/rest-api/parent/header/parent")
+    put.side_effect = [
+        httpx.Response(200, json={}),
+        httpx.Response(401, json={"error": "Unauthorized"}),
+        httpx.Response(200, json={}),
+    ]
+
+    await client.select_child(4711, 175)
+    await client.select_child(4712, 175)
+
+    assert client.active_child == (4712, 175)
+    assert put.call_count == 3  # select, expired, re-applied after re-login
+    await client.close()
+
+
+@respx.mock
+async def test_fetch_bytes_restarts_from_the_original_path_after_reauth(
+    client: SchoolSoftClient,
+) -> None:
+    """The signed /files/ URL is one-shot — replaying it post-login just fails."""
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    download = respx.get(f"{BASE}/yourschool/jsp/student/right_student_file_download.jsp")
+    download.side_effect = [
+        httpx.Response(302, headers={"Location": "/files/yourschool/tmp_file_1.tmp?md5=x"}),
+        httpx.Response(302, headers={"Location": "/files/yourschool/tmp_file_2.tmp?md5=y"}),
+    ]
+    stale = respx.get(f"{BASE}/files/yourschool/tmp_file_1.tmp").mock(
+        return_value=httpx.Response(401)
+    )
+    fresh = respx.get(f"{BASE}/files/yourschool/tmp_file_2.tmp").mock(
+        return_value=httpx.Response(
+            200, content=b"%PDF-1.4", headers={"content-type": "application/pdf"}
+        )
+    )
+
+    content, _headers = await client.fetch_bytes(
+        "jsp/student/right_student_file_download.jsp", params={"fileid": "11955"}
+    )
+
+    assert content == b"%PDF-1.4"
+    assert download.call_count == 2  # re-minted the signed URL, not replayed it
+    assert stale.called and fresh.called
+    assert download.calls[1].request.url.params["fileid"] == "11955"
+    await client.close()
+
+
+@respx.mock
+async def test_persistent_403_raises_access_error(client: SchoolSoftClient) -> None:
+    """Refused-after-reauth is its own type: valid session, not our resource."""
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    respx.get(f"{BASE}/yourschool/jsp/student/right_student_file_download.jsp").mock(
+        return_value=httpx.Response(403)
+    )
+
+    with pytest.raises(SchoolSoftAccessError):
+        await client.fetch_bytes("jsp/student/right_student_file_download.jsp")
     await client.close()

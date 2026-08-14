@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from schoolsoft_mcp.client import SchoolSoftClient
+from schoolsoft_mcp.client import SchoolSoftAuthError, SchoolSoftClient
 from schoolsoft_mcp.config import Settings
 from schoolsoft_mcp.server import AppContext, _fetch_attachment, _select_child
 
@@ -163,4 +163,68 @@ async def test_select_child_rejects_an_unknown_student(app: AppContext) -> None:
 
     with pytest.raises(ValueError, match="list_children"):
         await _select_child(app, 9999)
+    await app.client.close()
+
+
+@respx.mock
+async def test_refused_after_reauth_gets_the_note_too(app: AppContext) -> None:
+    """A 403 never reaches us as an HTTPStatusError — it arrives as an access error."""
+    _mock_login()
+    news = respx.get(NEWS_URL).mock(return_value=httpx.Response(200, text="<html/>"))
+    download = respx.get(DOWNLOAD_URL)
+    download.side_effect = [
+        httpx.Response(403),  # -> re-login
+        httpx.Response(403),  # -> SchoolSoftAccessError
+        httpx.Response(403),  # retry after priming
+        httpx.Response(403),
+    ]
+
+    content, _headers, note = await _fetch_attachment(
+        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+    )
+
+    assert content == b""
+    assert note is not None
+    assert "student_id" in note
+    assert news.called
+    await app.client.close()
+
+
+@respx.mock
+async def test_bad_credentials_are_not_dressed_up_as_a_child_problem(
+    app: AppContext,
+) -> None:
+    _mock_login()
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/Login.jsp?error=1"})
+    )
+
+    with pytest.raises(SchoolSoftAuthError):
+        await _fetch_attachment(
+            app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        )
+    await app.client.close()
+
+
+@respx.mock
+async def test_missing_org_id_fails_loudly(app: AppContext) -> None:
+    """Guessing orgId=1 would switch nothing and answer for the previous child."""
+    _mock_login()
+    respx.get(HEADER_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "children": [{"id": 4711, "name": "Bea"}, {"id": 4712, "name": "Cai"}],
+                "currentChildId": 4711,
+                "currentOrgId": 175,
+            },
+        )
+    )
+    put = respx.put(HEADER_URL).mock(return_value=httpx.Response(200, json={}))
+
+    with pytest.raises(ValueError, match="org_id"):
+        await _select_child(app, 4712)
+
+    assert not put.called
+    assert app.client.active_child is None
     await app.client.close()

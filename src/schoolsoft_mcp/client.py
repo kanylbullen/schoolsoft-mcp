@@ -23,6 +23,15 @@ class SchoolSoftAuthError(Exception):
     """Raised when authentication fails."""
 
 
+class SchoolSoftAccessError(SchoolSoftAuthError):
+    """Raised when a resource stays refused after a successful re-auth.
+
+    Distinct from a credential failure: the session is valid, the resource
+    just isn't this session's to fetch — on a parent account that usually
+    means it belongs to a child other than the selected one.
+    """
+
+
 class SchoolSoftConnectionError(Exception):
     """Raised when the SchoolSoft server cannot be reached."""
 
@@ -143,27 +152,36 @@ class SchoolSoftClient:
         logger.debug("Login successful for school=%s usertype=%s", self._school, self._usertype)
 
         if self._active_child is not None:
-            await self._apply_active_child()
+            # Already inside a fresh login — a second one would recurse.
+            await self._apply_active_child(allow_reauth=False)
 
     async def select_child(self, student_id: int, org_id: int) -> None:
         """Make ``student_id`` the child this session resolves data against.
 
         Sticky for the lifetime of the client: re-applied after every
         re-authentication so an expired session can't quietly hand back the
-        default child's schedule, news, or attachments.
+        default child's schedule, news, or attachments. A selection that
+        SchoolSoft refuses is rolled back, so a rejected ``org_id`` can't
+        leave the client claiming a child it never switched to.
         """
+        previous = self._active_child
         self._active_child = (student_id, org_id)
-        if not self._logged_in:
-            await self.login()  # login() applies the selection itself
-            return
-        await self._apply_active_child()
+        try:
+            if not self._logged_in:
+                await self.login()  # login() applies the selection itself
+            else:
+                await self._apply_active_child()
+        except Exception:
+            self._active_child = previous
+            raise
 
-    async def _apply_active_child(self) -> None:
+    async def _apply_active_child(self, *, allow_reauth: bool = True) -> None:
         """PUT the current child selection.
 
         Deliberately bypasses :meth:`fetch_json` — it is called *from*
         ``login()``, and going through the re-authenticating helpers would
-        recurse.
+        recurse. ``allow_reauth=False`` is that call: the session is known
+        fresh, so a refusal is a real refusal.
         """
         if self._active_child is None:
             return
@@ -180,7 +198,19 @@ class SchoolSoftClient:
                 f"Could not select child {student_id} (org {org_id}): {err}"
             ) from err
 
-        if resp.status_code >= 400 or _is_login_redirect(resp):
+        if _is_login_redirect(resp) or resp.status_code in (401, 403):
+            if not allow_reauth:
+                raise SchoolSoftAccessError(
+                    f"Session rejected the selection of child {student_id} "
+                    f"(org {org_id}) right after logging in (HTTP "
+                    f"{resp.status_code})."
+                )
+            logger.debug("Session expired while selecting child, re-authenticating")
+            self._logged_in = False
+            await self.login()  # re-applies the selection on the fresh session
+            return
+
+        if resp.status_code >= 400:
             raise SchoolSoftAuthError(
                 f"SchoolSoft refused to select child {student_id} with orgId "
                 f"{org_id} (HTTP {resp.status_code}). Check the org_id — it "
@@ -227,7 +257,7 @@ class SchoolSoftClient:
                     else f"{resp.status_code} from REST"
                 )
                 if attempts_after_relogin >= 1:
-                    raise SchoolSoftAuthError(
+                    raise SchoolSoftAccessError(
                         f"Re-authenticated but still got {signal} for {url} — giving up."
                     )
                 logger.debug(
@@ -238,6 +268,11 @@ class SchoolSoftClient:
                 self._logged_in = False
                 await self.login()
                 attempts_after_relogin += 1
+                # Restart from the original path: mid-chain we're on a signed
+                # one-shot URL that the old session minted, and replaying it
+                # under the new session just fails again.
+                url = self.url_for(path)
+                current_params = params
                 continue
 
             if resp.status_code in (301, 302, 303, 307, 308):

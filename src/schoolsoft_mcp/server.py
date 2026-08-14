@@ -14,7 +14,12 @@ from typing import Any, Protocol, TypeVar
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 
-from .client import SchoolSoftAuthError, SchoolSoftClient, SchoolSoftConnectionError
+from .client import (
+    SchoolSoftAccessError,
+    SchoolSoftAuthError,
+    SchoolSoftClient,
+    SchoolSoftConnectionError,
+)
 from .config import ConfigError, Settings
 from .models import (
     AsOf,
@@ -149,8 +154,10 @@ def _stamp(response: _AsOfT) -> _AsOfT:
 NEWS_ITEM_PATH = "jsp/student/right_student_news.jsp"
 
 # SchoolSoft answers a download the session isn't entitled to with a 404 on
-# the signed /files/ URL (403 on some installs) rather than an error page.
-_ATTACHMENT_RETRY_STATUSES = frozenset({403, 404})
+# the signed /files/ URL rather than an error page. A 403 never surfaces as
+# an HTTPStatusError — fetch_bytes reads it as session expiry and re-tries
+# the login first, raising SchoolSoftAccessError if it stays refused.
+_ATTACHMENT_RETRY_STATUSES = frozenset({404})
 
 
 async def _select_child(
@@ -191,10 +198,17 @@ async def _resolve_org_id(app: AppContext, student_id: int) -> int:
         )
     if match.org_id is not None:
         return match.org_id
-    if children.active_org_id is not None:
+    if match.active and children.active_org_id is not None:
         return children.active_org_id
-    logger.warning("No orgId for child %s in parent header; assuming 1", student_id)
-    return 1
+    # Guessing here is worse than failing: SchoolSoft accepts a wrong orgId
+    # with a 200 and leaves the previous child selected, so every following
+    # call would quietly answer for the wrong kid.
+    raise ValueError(
+        f"SchoolSoft's parent header carries no orgId for student_id "
+        f"{student_id}, so the school it belongs to can't be determined. "
+        "Pass org_id= explicitly (it is the orgId in the school's URL / the "
+        "parent header payload)."
+    )
 
 
 async def _fetch_attachment(
@@ -219,8 +233,15 @@ async def _fetch_attachment(
     except httpx.HTTPStatusError as err:
         if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
             raise
-        if object_kind != "news":
-            return b"", {}, _attachment_failure_note(err, news_id=news_id, fileid=fileid)
+        first_failure: Exception = err
+    except SchoolSoftAccessError as err:
+        # Valid session, resource still refused — the wrong-child signature.
+        first_failure = err
+
+    if object_kind != "news":
+        return b"", {}, _attachment_failure_note(
+            first_failure, news_id=news_id, fileid=fileid
+        )
 
     # The JSP mints a signed /files/ URL only for a file the session is
     # entitled to right now, and a browser always has the news item open
@@ -236,8 +257,10 @@ async def _fetch_attachment(
     except (
         httpx.HTTPStatusError,
         SchoolSoftConnectionError,
-        SchoolSoftAuthError,
+        SchoolSoftAccessError,
     ) as err:
+        # A plain SchoolSoftAuthError (bad credentials) is deliberately not
+        # caught — that is not something a different student_id would fix.
         return b"", {}, _attachment_failure_note(err, news_id=news_id, fileid=fileid)
 
 
