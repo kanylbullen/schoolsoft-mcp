@@ -151,6 +151,11 @@ sanitized `dump_page` output.
 - **`orgId` is not always 1**: it comes from `list_children()[*].org_id`.
   A wrong `orgId` is accepted with a 200 while the session quietly stays on
   the previous child.
+- **A 404 on an attachment is not proof the file is gone**: the JSP copies
+  it to `/files/<school>/tmp_file_<id>.tmp` and redirects there straight
+  away, so a large file can 404 for a second or two while the copy lands
+  (seen on a 3.9 MB PDF). `_fetch_attachment` re-requests the JSP with a
+  short backoff — never replay the signed URL, it is one-shot.
 - **Redirect handling**: the client deliberately sets
   `follow_redirects=False` so login success/failure can be detected from
   the `Location` header.
