@@ -52,3 +52,4 @@ discovery/
 
 # Local secrets-manager configs (per-user, may include workspace IDs).
 .phase.json
+uv.lock
