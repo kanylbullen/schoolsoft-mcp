@@ -27,6 +27,14 @@ class Child(BaseModel):
     name: str = ""
     school: str = Field(default="", description="School/class label shown in the UI.")
     grade: str = Field(default="", description='e.g. "6" for "Läraskolan 6".')
+    org_id: int | None = Field(
+        default=None,
+        description=(
+            "SchoolSoft organisation ID for this child's school. Required "
+            "alongside student_id when switching the active child — it is "
+            "school-specific, not always 1."
+        ),
+    )
     active: bool = Field(
         default=False,
         description="True if this child is currently selected in SchoolSoft's session.",
@@ -37,6 +45,7 @@ class ChildList(BaseModel):
     school: str
     children: list[Child]
     active_student_id: int | None = None
+    active_org_id: int | None = None
     note: str | None = None
     as_of: AsOf | None = None
 

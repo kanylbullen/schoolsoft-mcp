@@ -142,6 +142,15 @@ sanitized `dump_page` output.
 
 - **Session expiry**: `SchoolSoftClient.fetch_html` re-logs in once on a
   redirect to the login page. Don't reimplement that flow elsewhere.
+- **The selected child is session state**: on a parent account every
+  `right_student_*` page and file download resolves against the one child
+  currently selected, and a fresh login resets it to SchoolSoft's default.
+  `SchoolSoftClient.select_child` remembers the selection and re-applies it
+  after each re-auth — go through it (or the `_select_child` helper in
+  `server.py`) rather than PUT-ing the header endpoint yourself.
+- **`orgId` is not always 1**: it comes from `list_children()[*].org_id`.
+  A wrong `orgId` is accepted with a 200 while the session quietly stays on
+  the previous child.
 - **Redirect handling**: the client deliberately sets
   `follow_redirects=False` so login success/failure can be detected from
   the `Location` header.

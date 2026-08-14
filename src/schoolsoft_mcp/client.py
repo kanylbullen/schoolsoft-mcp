@@ -32,9 +32,17 @@ class SchoolSoftClient:
 
     Maintains a cookie jar across requests and re-authenticates transparently
     when the session expires.
+
+    For parent accounts the session also carries *which child is selected* —
+    every ``right_student_*`` page and file download resolves against it.
+    A fresh login always lands on SchoolSoft's default child, so the
+    selection made via :meth:`select_child` is re-applied after each
+    re-authentication; otherwise a mid-session token refresh would silently
+    start returning another child's data.
     """
 
     LOGIN_PATH = "/{school}/jsp/Login.jsp"
+    PARENT_HEADER_PATH = "rest-api/parent/header/parent"
 
     def __init__(
         self,
@@ -61,6 +69,7 @@ class SchoolSoftClient:
             },
         )
         self._logged_in = False
+        self._active_child: tuple[int, int] | None = None
 
     async def __aenter__(self) -> Self:
         return self
@@ -79,6 +88,15 @@ class SchoolSoftClient:
     @property
     def school(self) -> str:
         return self._school
+
+    @property
+    def active_child(self) -> tuple[int, int] | None:
+        """``(student_id, org_id)`` selected via :meth:`select_child`, if any.
+
+        ``None`` means nothing has been selected in this process — the
+        session is on whichever child SchoolSoft defaults to.
+        """
+        return self._active_child
 
     def url_for(self, path: str) -> str:
         """Resolve a path against the school root, e.g. 'jsp/student/foo.jsp'."""
@@ -123,6 +141,52 @@ class SchoolSoftClient:
 
         self._logged_in = True
         logger.debug("Login successful for school=%s usertype=%s", self._school, self._usertype)
+
+        if self._active_child is not None:
+            await self._apply_active_child()
+
+    async def select_child(self, student_id: int, org_id: int) -> None:
+        """Make ``student_id`` the child this session resolves data against.
+
+        Sticky for the lifetime of the client: re-applied after every
+        re-authentication so an expired session can't quietly hand back the
+        default child's schedule, news, or attachments.
+        """
+        self._active_child = (student_id, org_id)
+        if not self._logged_in:
+            await self.login()  # login() applies the selection itself
+            return
+        await self._apply_active_child()
+
+    async def _apply_active_child(self) -> None:
+        """PUT the current child selection.
+
+        Deliberately bypasses :meth:`fetch_json` — it is called *from*
+        ``login()``, and going through the re-authenticating helpers would
+        recurse.
+        """
+        if self._active_child is None:
+            return
+        student_id, org_id = self._active_child
+        url = self.url_for(self.PARENT_HEADER_PATH)
+        try:
+            resp = await self._client.put(
+                url,
+                params={"childId": str(student_id), "orgId": str(org_id)},
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as err:
+            raise SchoolSoftConnectionError(
+                f"Could not select child {student_id} (org {org_id}): {err}"
+            ) from err
+
+        if resp.status_code >= 400 or _is_login_redirect(resp):
+            raise SchoolSoftAuthError(
+                f"SchoolSoft refused to select child {student_id} with orgId "
+                f"{org_id} (HTTP {resp.status_code}). Check the org_id — it "
+                "comes from list_children()[*].org_id and is school-specific."
+            )
+        logger.debug("Selected child %s (org %s)", student_id, org_id)
 
     async def fetch_bytes(
         self,

@@ -185,3 +185,72 @@ def test_resolve_redirect_query_only() -> None:
         )
         == "https://sms.test/yourschool/jsp/student/news.jsp?action=view&requestid=42"
     )
+
+
+@respx.mock
+async def test_select_child_puts_the_header_endpoint(client: SchoolSoftClient) -> None:
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    put = respx.put(f"{BASE}/yourschool/rest-api/parent/header/parent").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    await client.select_child(4712, 175)
+
+    assert client.active_child == (4712, 175)
+    assert put.call_count == 1
+    assert put.calls[0].request.url.params["childId"] == "4712"
+    assert put.calls[0].request.url.params["orgId"] == "175"
+    await client.close()
+
+
+@respx.mock
+async def test_active_child_survives_reauthentication(client: SchoolSoftClient) -> None:
+    """A silent re-login must not drop the session back to the default child.
+
+    Otherwise a mid-session expiry starts serving another kid's data under
+    the caller's assumption that nothing changed.
+    """
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    put = respx.put(f"{BASE}/yourschool/rest-api/parent/header/parent").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    news = respx.get(f"{BASE}/yourschool/jsp/student/right_student_news.jsp")
+    news.side_effect = [
+        httpx.Response(302, headers={"Location": "/yourschool/jsp/Login.jsp"}),
+        httpx.Response(200, text="<html>news</html>"),
+    ]
+
+    await client.select_child(4712, 175)
+    html = await client.fetch_html("jsp/student/right_student_news.jsp")
+
+    assert "news" in html
+    assert put.call_count == 2  # once on select, once after the re-login
+    assert client.active_child == (4712, 175)
+    await client.close()
+
+
+@respx.mock
+async def test_select_child_rejects_a_bad_org_id(client: SchoolSoftClient) -> None:
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    respx.put(f"{BASE}/yourschool/rest-api/parent/header/parent").mock(
+        return_value=httpx.Response(400, json={"error": "bad orgId"})
+    )
+
+    with pytest.raises(SchoolSoftAuthError, match="org_id"):
+        await client.select_child(4712, 1)
+    await client.close()

@@ -173,11 +173,20 @@ All tools accept no arguments unless noted.
 ### Multi-child accounts
 
 - **`list_children()`** — Children attached to this parent account, with
-  `student_id`, name, school/grade, and which one is currently active in
-  SchoolSoft's session.
-- **`set_active_child(student_id: int, org_id?: int = 1)`** — Switch the
-  active child. Subsequent data tools return information for this child
-  until the session changes again.
+  `student_id`, `org_id`, name, school/grade, and which one is currently
+  active in SchoolSoft's session.
+- **`set_active_child(student_id: int, org_id?: int)`** — Switch the
+  active child. Subsequent data tools return information for this child,
+  and the selection is re-applied automatically if the session expires
+  mid-run. `org_id` is looked up from `list_children` when omitted; it is
+  school-specific, and SchoolSoft accepts a wrong one without complaint
+  while leaving the previous child selected.
+
+> **The session has exactly one selected child.** Every `right_student_*`
+> page *and every attachment download* resolves against it. Asking for one
+> child's veckobrev while another is selected returns a 404 from
+> SchoolSoft's file server, not an error page — so the news, message, and
+> attachment tools take a `student_id` and switch first.
 
 ### Calendar and assignments
 
@@ -221,19 +230,27 @@ All tools accept no arguments unless noted.
 
 ### News, veckobrev, and attachments
 
-- **`get_news(older?: bool = False)`** — News and veckobrev. Each item
-  carries a `news_id`/`type_id` and a list of `attachments` with their
-  `fileid` and `filename`. Set `older=True` for the archived view.
-- **`get_news_item(news_id: int, type_id?: int = 1)`** — Fetch one news
-  item with the full body and attachments.
-- **`download_attachment(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news")`**
+- **`get_news(older?: bool = False, student_id?: int)`** — News and
+  veckobrev. Each item carries a `news_id`/`type_id` and a list of
+  `attachments` with their `fileid` and `filename`. Set `older=True` for
+  the archived view.
+- **`get_news_item(news_id: int, type_id?: int = 1, student_id?: int)`** —
+  Fetch one news item with the full body and attachments.
+- **`download_attachment(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int)`**
   — Download a news or message attachment as base64-encoded bytes. Use
   when you need the raw file (e.g. to save to disk). Otherwise prefer
   `read_attachment_text`, which is far cheaper for LLM context.
-- **`read_attachment_text(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", max_chars?: int = 50_000)`**
+- **`read_attachment_text(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_chars?: int = 50_000)`**
   — Download an attachment and return its extracted plain text. Supports
   PDF (via `pypdf`), `.docx` (via `python-docx`), and plain-text files.
   The right tool for *"vad står det i veckobrevet?"*.
+
+On a multi-child account, pass the same `student_id` to the download that
+you passed to `get_news` — attachments are only served for the child
+currently selected. A download that still fails after the retry comes back
+with an empty payload and a `note` explaining which of the two causes it
+was (wrong child vs. a file genuinely missing upstream) instead of raising
+a bare 404.
 
 ### School information & contacts
 

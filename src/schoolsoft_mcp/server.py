@@ -146,6 +146,117 @@ def _stamp(response: _AsOfT) -> _AsOfT:
     return response
 
 
+NEWS_ITEM_PATH = "jsp/student/right_student_news.jsp"
+
+# SchoolSoft answers a download the session isn't entitled to with a 404 on
+# the signed /files/ URL (403 on some installs) rather than an error page.
+_ATTACHMENT_RETRY_STATUSES = frozenset({403, 404})
+
+
+async def _select_child(
+    app: AppContext, student_id: int | None, *, org_id: int | None = None
+) -> None:
+    """Point the session at ``student_id``. Caller must hold ``app.lock``.
+
+    No-op when ``student_id`` is ``None`` or already selected. Looks the
+    child's ``org_id`` up from the parent header when the caller didn't
+    supply one: it is school-specific, and sending the wrong one leaves the
+    session on the previous child while still answering 200.
+    """
+    if student_id is None:
+        return
+    current = app.client.active_child
+    already_selected = (
+        current is not None
+        and current[0] == student_id
+        and (org_id is None or current[1] == org_id)
+    )
+    if already_selected:
+        return
+    if org_id is None:
+        org_id = await _resolve_org_id(app, student_id)
+    await app.client.select_child(student_id, org_id)
+
+
+async def _resolve_org_id(app: AppContext, student_id: int) -> int:
+    """Find ``student_id``'s org ID on the parent header. Lock must be held."""
+    payload = await app.client.fetch_json(SchoolSoftClient.PARENT_HEADER_PATH)
+    children = parse_parent_header(payload, school=app.settings.school)
+    match = next((c for c in children.children if c.student_id == student_id), None)
+    if match is None:
+        known = ", ".join(str(c.student_id) for c in children.children) or "none"
+        raise ValueError(
+            f"student_id {student_id} is not on this parent account "
+            f"(known ids: {known}). Call list_children() first."
+        )
+    if match.org_id is not None:
+        return match.org_id
+    if children.active_org_id is not None:
+        return children.active_org_id
+    logger.warning("No orgId for child %s in parent header; assuming 1", student_id)
+    return 1
+
+
+async def _fetch_attachment(
+    app: AppContext,
+    *,
+    news_id: int,
+    fileid: int,
+    type_id: int,
+    object_kind: str,
+) -> tuple[bytes, dict[str, str], str | None]:
+    """Download an attachment. Returns ``(content, headers, note)``.
+
+    A non-empty ``note`` means the download failed in a way the caller can
+    act on — content and headers are then empty. Lock must be held.
+    """
+    path, params = build_download_path(
+        parent_id=news_id, type_id=type_id, fileid=fileid, object_kind=object_kind
+    )
+    try:
+        content, headers = await app.client.fetch_bytes(path, params=params)
+        return content, headers, None
+    except httpx.HTTPStatusError as err:
+        if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
+            raise
+        if object_kind != "news":
+            return b"", {}, _attachment_failure_note(err, news_id=news_id, fileid=fileid)
+
+    # The JSP mints a signed /files/ URL only for a file the session is
+    # entitled to right now, and a browser always has the news item open
+    # when its download link is clicked. Reproduce that state, then retry
+    # once — it costs one GET and only on the failing path.
+    try:
+        await app.client.fetch_html(
+            NEWS_ITEM_PATH,
+            params={"requestid": str(news_id), "type": str(type_id), "action": "view"},
+        )
+        content, headers = await app.client.fetch_bytes(path, params=params)
+        return content, headers, None
+    except (
+        httpx.HTTPStatusError,
+        SchoolSoftConnectionError,
+        SchoolSoftAuthError,
+    ) as err:
+        return b"", {}, _attachment_failure_note(err, news_id=news_id, fileid=fileid)
+
+
+def _attachment_failure_note(err: Exception, *, news_id: int, fileid: int) -> str:
+    detail = (
+        f"HTTP {err.response.status_code}"
+        if isinstance(err, httpx.HTTPStatusError)
+        else str(err)
+    )
+    return (
+        f"Could not download fileid {fileid} of news item {news_id} ({detail}). "
+        "SchoolSoft only serves attachments belonging to the child currently "
+        "selected in the session. If this item is another child's, call "
+        "list_children() and pass that child's student_id to this tool. If the "
+        "right child is already selected, the file is missing on SchoolSoft's "
+        "file server — open the item in the web UI to confirm."
+    )
+
+
 async def _fetch_first(
     client: SchoolSoftClient,
     paths: tuple[str, ...],
@@ -173,10 +284,13 @@ async def list_children(ctx: Context[Any, AppContext, Any]) -> ChildList:
     SchoolSoft session has exactly one "active" child at a time, and tools
     like ``get_schedule`` / ``get_lunch_menu`` return data for whichever
     child is currently active. Switch with ``set_active_child``.
+
+    Each child also carries the ``org_id`` its school uses — pass it along
+    with ``student_id`` when switching if you want to skip the extra lookup.
     """
     app = _app(ctx)
     async with app.lock:
-        payload = await app.client.fetch_json("rest-api/parent/header/parent")
+        payload = await app.client.fetch_json(SchoolSoftClient.PARENT_HEADER_PATH)
     return _stamp(parse_parent_header(payload, school=app.settings.school))
 
 
@@ -184,24 +298,21 @@ async def list_children(ctx: Context[Any, AppContext, Any]) -> ChildList:
 async def set_active_child(
     ctx: Context[Any, AppContext, Any],
     student_id: int,
-    org_id: int = 1,
+    org_id: int | None = None,
 ) -> ChildList:
     """Make ``student_id`` the active child in SchoolSoft's session.
 
-    Subsequent calls to schedule / lunch / homework / planning return data
-    for this child until ``set_active_child`` is called again or the session
-    expires. ``org_id`` is the school org ID — almost always 1 for a single-
-    school account. Returns the refreshed child list (with the new active
-    flag) so the caller can confirm the switch.
+    Subsequent calls to schedule / lunch / homework / planning / news return
+    data for this child, and it stays selected across session expiry. Leave
+    ``org_id`` unset to have it looked up from ``list_children`` — it is
+    school-specific, and passing a wrong one is accepted silently while the
+    session stays on the previous child. Returns the refreshed child list
+    (with the new active flag) so the caller can confirm the switch.
     """
     app = _app(ctx)
     async with app.lock:
-        await app.client.fetch_json(
-            "rest-api/parent/header/parent",
-            method="PUT",
-            params={"childId": str(student_id), "orgId": str(org_id)},
-        )
-        payload = await app.client.fetch_json("rest-api/parent/header/parent")
+        await _select_child(app, student_id, org_id=org_id)
+        payload = await app.client.fetch_json(SchoolSoftClient.PARENT_HEADER_PATH)
     return _stamp(parse_parent_header(payload, school=app.settings.school))
 
 
@@ -501,16 +612,23 @@ async def get_unreported_absence(
 async def get_news(
     ctx: Context[Any, AppContext, Any],
     older: bool = False,
+    student_id: int | None = None,
 ) -> NewsFeed:
     """Return news items including 'veckobrev'. Set ``older=True`` for archived items.
 
     Each item carries a ``news_id`` and ``type_id`` you can pass to
     ``get_news_item`` for the full body + attachments, or use the attachment
     ``fileid`` directly with ``download_attachment`` / ``read_attachment_text``.
+
+    The feed is per-child. On a multi-child parent account pass
+    ``student_id`` (from ``list_children``) to read a specific child's news —
+    and pass the *same* ``student_id`` when downloading its attachments,
+    since SchoolSoft only serves files for the selected child.
     """
     app = _app(ctx)
     params = {"type": "2"} if older else None
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, NEWS_PATHS, params=params)
     return _stamp(
         parse_news(
@@ -526,11 +644,13 @@ async def get_news_item(
     ctx: Context[Any, AppContext, Any],
     news_id: int,
     type_id: int = 1,
+    student_id: int | None = None,
 ) -> NewsItem:
     """Fetch one news item with the full body and attachments.
 
     ``news_id`` comes from get_news().items[*].news_id. ``type_id`` is 1 for
     current items, 2 for older — usually matches the item you got from get_news.
+    ``student_id`` selects the child the item belongs to (see ``get_news``).
     """
     app = _app(ctx)
     params = {
@@ -539,9 +659,8 @@ async def get_news_item(
         "action": "view",
     }
     async with app.lock:
-        html = await app.client.fetch_html(
-            "jsp/student/right_student_news.jsp", params=params
-        )
+        await _select_child(app, student_id)
+        html = await app.client.fetch_html(NEWS_ITEM_PATH, params=params)
     feed = parse_news(html, school=app.settings.school, default_type_id=type_id)
     for item in feed.items:
         if item.news_id == news_id:
@@ -565,6 +684,7 @@ async def download_attachment(
     fileid: int,
     type_id: int = 1,
     object_kind: str = "news",
+    student_id: int | None = None,
     max_bytes: int = 700_000,
 ) -> AttachmentBytes:
     """Download a news/message attachment as base64-encoded bytes.
@@ -583,18 +703,35 @@ async def download_attachment(
     ``object_kind`` is ``"news"`` for veckobrev / news attachments and
     ``"message"`` for inbox messages. ``type_id`` matches the news item's
     type field (1 = current, 2 = older).
+
+    On a multi-child parent account, pass the ``student_id`` of the child
+    the item belongs to — SchoolSoft only serves attachments for the child
+    currently selected in the session, and answers 404 for the others.
     """
     if object_kind not in {"news", "message"}:
         raise ValueError("object_kind must be 'news' or 'message'")
     app = _app(ctx)
-    path, params = build_download_path(
-        parent_id=news_id, type_id=type_id, fileid=fileid, object_kind=object_kind
-    )
     async with app.lock:
-        content, headers = await app.client.fetch_bytes(path, params=params)
+        await _select_child(app, student_id)
+        content, headers, note = await _fetch_attachment(
+            app,
+            news_id=news_id,
+            fileid=fileid,
+            type_id=type_id,
+            object_kind=object_kind,
+        )
     fallback_name = f"attachment_{fileid}"
     filename = filename_from_headers(headers, fallback_name)
     content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
+
+    if note is not None:
+        return AttachmentBytes(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=0,
+            data_base64="",
+            note=note,
+        )
 
     if len(content) > max_bytes:
         return AttachmentBytes(
@@ -625,6 +762,7 @@ async def read_attachment_text(
     fileid: int,
     type_id: int = 1,
     object_kind: str = "news",
+    student_id: int | None = None,
     max_chars: int = 50_000,
     offset: int = 0,
 ) -> AttachmentText:
@@ -641,18 +779,36 @@ async def read_attachment_text(
     ``offset`` advanced past the chars already received. The returned
     ``truncated=True`` and the response's ``next_offset`` field signal more
     content is available.
+
+    On a multi-child parent account, pass the ``student_id`` of the child
+    the item belongs to — SchoolSoft only serves attachments for the child
+    currently selected in the session, and answers 404 for the others.
     """
     if object_kind not in {"news", "message"}:
         raise ValueError("object_kind must be 'news' or 'message'")
     app = _app(ctx)
-    path, params = build_download_path(
-        parent_id=news_id, type_id=type_id, fileid=fileid, object_kind=object_kind
-    )
     async with app.lock:
-        content, headers = await app.client.fetch_bytes(path, params=params)
+        await _select_child(app, student_id)
+        content, headers, failure = await _fetch_attachment(
+            app,
+            news_id=news_id,
+            fileid=fileid,
+            type_id=type_id,
+            object_kind=object_kind,
+        )
     fallback_name = f"attachment_{fileid}"
     filename = filename_from_headers(headers, fallback_name)
     content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
+
+    if failure is not None:
+        return AttachmentText(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=0,
+            text="",
+            note=failure,
+        )
+
     # Extract enough to satisfy offset + max_chars, then slice. Keeps the
     # parser simple (no per-format streaming) while still letting callers
     # paginate through large documents.
