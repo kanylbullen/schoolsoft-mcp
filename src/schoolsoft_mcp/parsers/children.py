@@ -48,6 +48,8 @@ _ACTIVE_ID_KEYS = (
     "selectedStudent",
     "currentStudent",
 )
+_ORG_ID_KEYS = ("orgId", "org_id", "organisationId", "organizationId", "schoolId")
+_ACTIVE_ORG_ID_KEYS = ("currentOrgId", "activeOrgId", "selectedOrgId")
 
 
 def parse_parent_header(payload: Any, *, school: str) -> ChildList:
@@ -71,6 +73,7 @@ def parse_parent_header(payload: Any, *, school: str) -> ChildList:
         )
 
     active_id = _first_int(payload, _ACTIVE_ID_KEYS)
+    active_org_id = _first_int(payload, _ACTIVE_ORG_ID_KEYS)
     children: list[Child] = []
     for entry in students_raw:
         if not isinstance(entry, dict):
@@ -80,6 +83,10 @@ def parse_parent_header(payload: Any, *, school: str) -> ChildList:
             continue
         name = _full_name(entry)
         primary_school = _primary_school(entry)
+        is_active = active_id is not None and student_id == active_id
+        org_id = _first_int(primary_school, _ORG_ID_KEYS) or _first_int(entry, _ORG_ID_KEYS)
+        if org_id is None and is_active:
+            org_id = active_org_id
         children.append(
             Child(
                 student_id=student_id,
@@ -88,11 +95,17 @@ def parse_parent_header(payload: Any, *, school: str) -> ChildList:
                 or _first_str(entry, _SCHOOL_KEYS),
                 grade=_first_str(primary_school, _GRADE_KEYS)
                 or _first_str(entry, _GRADE_KEYS),
-                active=(active_id is not None and student_id == active_id),
+                org_id=org_id,
+                active=is_active,
             )
         )
 
-    return ChildList(school=school, children=children, active_student_id=active_id)
+    return ChildList(
+        school=school,
+        children=children,
+        active_student_id=active_id,
+        active_org_id=active_org_id,
+    )
 
 
 def _full_name(entry: dict[str, Any]) -> str:
@@ -106,11 +119,21 @@ def _full_name(entry: dict[str, Any]) -> str:
 
 
 def _primary_school(entry: dict[str, Any]) -> dict[str, Any]:
-    """Return the first entry in ``schools`` (or an empty dict)."""
+    """Return the school the parent can actually see (or an empty dict).
+
+    A child who changed schools keeps the old enrolment in ``schools``, so
+    the first element isn't necessarily the live one. Prefer an active
+    enrolment the parent has access to — its ``orgId`` is what
+    ``set_active_child`` has to send.
+    """
     schools = entry.get("schools")
-    if isinstance(schools, list) and schools and isinstance(schools[0], dict):
-        return schools[0]
-    return {}
+    if not isinstance(schools, list):
+        return {}
+    candidates = [s for s in schools if isinstance(s, dict)]
+    for school in candidates:
+        if school.get("studentActive") is not False and school.get("parentAllowedAccess") is not False:
+            return school
+    return candidates[0] if candidates else {}
 
 
 def _first_list(d: dict[str, Any], keys: tuple[str, ...]) -> list[Any] | None:
