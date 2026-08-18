@@ -108,6 +108,86 @@ async def test_fetch_json_reauths_on_403(client: SchoolSoftClient) -> None:
     await client.close()
 
 
+def _mock_app_auth() -> tuple[respx.Route, respx.Route]:
+    login = respx.post(f"{BASE}/yourschool/rest/app/login").mock(
+        return_value=httpx.Response(200, json={"ssUser": {"appKey": "app-key"}})
+    )
+    token = respx.get(f"{BASE}/yourschool/rest/app/token").mock(
+        return_value=httpx.Response(
+            200, json={"token": "app-token", "expiryDate": 1_800_000_000_000}
+        )
+    )
+    return login, token
+
+
+@respx.mock
+async def test_get_fritids_schedule_uses_legacy_app_contract(
+    client: SchoolSoftClient,
+) -> None:
+    login, token = _mock_app_auth()
+    target = respx.get(
+        f"{BASE}/yourschool/api/preschoolschedules/parent/4712/175/36/36/",
+        params={"year": "2026"},
+    ).mock(return_value=httpx.Response(200, json={"preschoolschedules": []}))
+
+    result = await client.get_fritids_schedule(week=36, year=2026, student_id=4712, org_id=175)
+
+    assert result == {"preschoolschedules": []}
+    assert login.called and token.called and target.called
+    login_body = login.calls[0].request.read()
+    assert b"identification=alice" in login_body
+    assert b"verification=secret" in login_body
+    assert b"logintype=4" in login_body
+    assert b"usertype=2" in login_body
+    assert token.calls[0].request.headers["appkey"] == "app-key"
+    assert target.calls[0].request.headers["token"] == "app-token"
+    await client.close()
+
+
+@respx.mock
+async def test_set_fritids_day_comment_posts_complete_legacy_day(
+    client: SchoolSoftClient,
+) -> None:
+    _mock_app_auth()
+    target = respx.post(
+        f"{BASE}/yourschool/api/preschoolschedules/parent/preschoolschedule/4712/175"
+    ).mock(return_value=httpx.Response(200, json={"saved": True}))
+
+    result = await client.set_fritids_day_comment(
+        date_ms=1_788_211_200_000,
+        start_time_ms=1_788_235_200_000,
+        end_time_ms=1_788_264_000_000,
+        comment="Picked up by grandparent",
+        student_id=4712,
+        org_id=175,
+    )
+
+    assert result == {"saved": True}
+    assert target.calls[0].request.read() == (
+        b'[{"date":1788211200000,"startTime":1788235200000,'
+        b'"endTime":1788264000000,"parentComment":"Picked up by grandparent"}]'
+    )
+    assert target.calls[0].request.headers["token"] == "app-token"
+    await client.close()
+
+
+@respx.mock
+async def test_app_request_reauthenticates_once_on_401(client: SchoolSoftClient) -> None:
+    login, token = _mock_app_auth()
+    target = respx.get(f"{BASE}/yourschool/api/preschoolschedules/parent/4712/175/36/36/")
+    target.side_effect = [
+        httpx.Response(401, json={"error": "expired"}),
+        httpx.Response(200, json={"preschoolschedules": []}),
+    ]
+
+    await client.get_fritids_schedule(week=36, year=2026, student_id=4712, org_id=175)
+
+    assert login.call_count == 2
+    assert token.call_count == 2
+    assert target.call_count == 2
+    await client.close()
+
+
 @respx.mock
 async def test_fetch_bytes_reauths_on_401(client: SchoolSoftClient) -> None:
     """File-download paths get the same auto-reauth treatment as fetch_json."""

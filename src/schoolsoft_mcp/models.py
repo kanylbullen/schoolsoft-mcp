@@ -50,6 +50,22 @@ class ChildList(BaseModel):
     as_of: AsOf | None = None
 
 
+class FritidsDayCommentResult(BaseModel):
+    """Confirmation that a guardian day comment was written in SchoolSoft."""
+
+    school: str
+    date: str = Field(description='ISO date, e.g. "2026-09-01".')
+    comment: str
+    student_id: int
+    org_id: int
+    saved: bool = True
+    cleared: bool = Field(
+        default=False,
+        description="True when the supplied empty comment removed the existing text.",
+    )
+    as_of: AsOf | None = None
+
+
 class LunchDay(BaseModel):
     day: str
     meal: str = ""

@@ -21,6 +21,7 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_attendance`  | Experimental    | Heuristic date/minute extraction.                             |
 | `get_news`        | Experimental    | Parses startpage headings + bodies.                           |
 | `get_messages`    | Experimental    | Subject/sender/date are heuristic.                            |
+| `set_fritids_day_comment` | Experimental | Writes Hämtning/Lämning day comments through the guardian API. |
 | `dump_page`       | Debug           | Returns raw HTML so parsers can be improved.                  |
 
 Experimental tools return a `note` field when they cannot find structured
@@ -187,6 +188,16 @@ All tools accept no arguments unless noted.
 > child's veckobrev while another is selected returns a 404 from
 > SchoolSoft's file server, not an error page — so the news, message, and
 > attachment tools take a `student_id` and switch first.
+
+### Hämtning/Lämning comments
+
+- **`set_fritids_day_comment(date: str, comment: str, student_id?: int)`** —
+  Write the guardian comment for one childcare/fritids schedule day. `date`
+  must be `YYYY-MM-DD`. Pass an empty comment to clear the existing text.
+  This is a write operation and is separate from the weekly absence-report
+  comment. The day must already have pickup/drop-off times; the tool reads
+  and preserves them before writing. Comments are limited to 100 characters.
+  On a multi-child parent account, pass the child's `student_id`.
 
 ### Calendar and assignments
 

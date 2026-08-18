@@ -8,6 +8,7 @@ import sys
 from types import TracebackType
 from typing import Any
 from urllib.parse import urljoin
+from uuid import uuid4
 
 import httpx
 
@@ -52,6 +53,10 @@ class SchoolSoftClient:
 
     LOGIN_PATH = "/{school}/jsp/Login.jsp"
     PARENT_HEADER_PATH = "rest-api/parent/header/parent"
+    APP_LOGIN_PATH = "rest/app/login"
+    APP_TOKEN_PATH = "rest/app/token"
+    APP_VERSION = "2.3.21"
+    APP_OS = "android"
 
     def __init__(
         self,
@@ -79,6 +84,9 @@ class SchoolSoftClient:
         )
         self._logged_in = False
         self._active_child: tuple[int, int] | None = None
+        self._app_key: str | None = None
+        self._app_token: str | None = None
+        self._device_id = str(uuid4())
 
     async def __aenter__(self) -> Self:
         return self
@@ -349,6 +357,157 @@ class SchoolSoftClient:
             raise SchoolSoftConnectionError(
                 f"Expected JSON from {url}, got {resp.headers.get('content-type', '?')}: {err}"
             ) from err
+
+    async def set_fritids_day_comment(
+        self,
+        *,
+        date_ms: int,
+        start_time_ms: int,
+        end_time_ms: int,
+        comment: str,
+        student_id: int,
+        org_id: int,
+    ) -> Any:
+        """Set a legacy-app guardian comment while preserving the day's times."""
+        path = f"api/preschoolschedules/parent/preschoolschedule/{student_id}/{org_id}"
+        body = [
+            {
+                "date": date_ms,
+                "startTime": start_time_ms,
+                "endTime": end_time_ms,
+                "parentComment": comment,
+            }
+        ]
+        return await self._app_request_json(path, method="POST", body=body)
+
+    async def get_fritids_schedule(
+        self,
+        *,
+        week: int,
+        year: int,
+        student_id: int,
+        org_id: int,
+    ) -> Any:
+        """Return one ISO week's legacy-app Hämtning/Lämning records."""
+        path = f"api/preschoolschedules/parent/{student_id}/{org_id}/{week}/{week}/"
+        return await self._app_request_json(path, params={"year": str(year)})
+
+    async def _app_login(self) -> None:
+        """Authenticate through the legacy mobile-app flow and cache its token."""
+        if self._usertype != 2:
+            raise SchoolSoftAuthError(
+                "Hämtning/Lämning comments require a parent account (SCHOOLSOFT_USERTYPE=2)."
+            )
+        login_url = self.url_for(self.APP_LOGIN_PATH)
+        try:
+            login = await self._client.post(
+                login_url,
+                data={
+                    "identification": self._username,
+                    "verification": self._password,
+                    "logintype": "4",
+                    "usertype": "2",
+                    "deviceid": self._device_id,
+                },
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as err:
+            raise SchoolSoftConnectionError(
+                f"Could not reach SchoolSoft's app login: {err}"
+            ) from err
+        if login.status_code >= 400:
+            raise SchoolSoftAuthError(
+                "SchoolSoft's app login failed. The account may require a "
+                "login method other than username/password."
+            )
+        try:
+            payload = login.json()
+        except json.JSONDecodeError as err:
+            raise SchoolSoftConnectionError(
+                "SchoolSoft's app login returned a non-JSON response."
+            ) from err
+        user = payload.get("ssUser") if isinstance(payload, dict) else None
+        app_key = user.get("appKey") if isinstance(user, dict) else None
+        if not isinstance(app_key, str) or not app_key:
+            raise SchoolSoftAuthError(
+                "SchoolSoft's app login did not return an app key for this account."
+            )
+        self._app_key = app_key
+
+        try:
+            token = await self._client.get(
+                self.url_for(self.APP_TOKEN_PATH),
+                headers={
+                    "Accept": "application/json",
+                    "appversion": self.APP_VERSION,
+                    "appos": self.APP_OS,
+                    "appkey": app_key,
+                    "deviceid": self._device_id,
+                },
+            )
+        except httpx.HTTPError as err:
+            raise SchoolSoftConnectionError(
+                f"Could not request a SchoolSoft app token: {err}"
+            ) from err
+        if token.status_code >= 400:
+            raise SchoolSoftAuthError(
+                f"SchoolSoft refused the app token request (HTTP {token.status_code})."
+            )
+        try:
+            token_payload = token.json()
+        except json.JSONDecodeError as err:
+            raise SchoolSoftConnectionError(
+                "SchoolSoft's app token endpoint returned a non-JSON response."
+            ) from err
+        token_value = token_payload.get("token") if isinstance(token_payload, dict) else None
+        if not isinstance(token_value, str) or not token_value:
+            raise SchoolSoftAuthError("SchoolSoft's app token response had no token.")
+        self._app_token = token_value
+
+    async def _app_request_json(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        params: dict[str, str] | None = None,
+        body: Any = None,
+    ) -> Any:
+        """Call a token-authenticated endpoint used by the legacy mobile app."""
+        if self._app_token is None:
+            await self._app_login()
+        url = self.url_for(path)
+        for attempt in range(2):
+            headers = {
+                "Accept": "application/json",
+                "appversion": self.APP_VERSION,
+                "appos": self.APP_OS,
+                "token": self._app_token or "",
+            }
+            request_kwargs: dict[str, Any] = {"params": params, "headers": headers}
+            if body is not None:
+                request_kwargs["json"] = body
+            try:
+                response = await self._client.request(method, url, **request_kwargs)
+            except httpx.HTTPError as err:
+                raise SchoolSoftConnectionError(f"{method} {url} failed: {err}") from err
+            if response.status_code == 401 and attempt == 0:
+                self._app_key = None
+                self._app_token = None
+                await self._app_login()
+                continue
+            response.raise_for_status()
+            if not response.content:
+                return None
+            try:
+                return response.json()
+            except json.JSONDecodeError as err:
+                raise SchoolSoftConnectionError(
+                    f"Expected JSON from {url}, got "
+                    f"{response.headers.get('content-type', '?')}: {err}"
+                ) from err
+        raise SchoolSoftAccessError(
+            f"Re-authenticated but SchoolSoft still refused {method} {url}."
+        )
 
     async def fetch_html(self, path: str, *, params: dict[str, str] | None = None) -> str:
         """GET an authenticated page, re-logging in once on session expiry."""

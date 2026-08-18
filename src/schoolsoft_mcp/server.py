@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
+from zoneinfo import ZoneInfo
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -28,6 +29,7 @@ from .models import (
     AttendanceReport,
     ChildList,
     ContactList,
+    FritidsDayCommentResult,
     GradeList,
     HomeworkList,
     LibraryFileList,
@@ -218,6 +220,82 @@ async def _resolve_org_id(app: AppContext, student_id: int) -> int:
     )
 
 
+async def _fritids_write_context(app: AppContext, student_id: int | None) -> tuple[int, int]:
+    """Resolve ``(student_id, org_id)`` for a guardian schedule write."""
+    await _select_child(app, student_id)
+    header_payload = await app.client.fetch_json(SchoolSoftClient.PARENT_HEADER_PATH)
+    children = parse_parent_header(header_payload, school=app.settings.school)
+
+    resolved_student_id = student_id or children.active_student_id
+    selected = app.client.active_child
+    resolved_org_id = (
+        selected[1]
+        if student_id is not None and selected is not None and selected[0] == student_id
+        else children.active_org_id
+    )
+    if resolved_student_id is not None and resolved_org_id is None:
+        for child in children.children:
+            if child.student_id == resolved_student_id:
+                resolved_org_id = child.org_id
+                break
+    if resolved_student_id is None and len(children.children) == 1:
+        resolved_student_id = children.children[0].student_id
+        resolved_org_id = children.children[0].org_id
+    if resolved_student_id is None or resolved_org_id is None:
+        raise ValueError(
+            "Could not resolve the active child and school organisation. "
+            "Call list_children(), then pass that child's student_id."
+        )
+
+    return resolved_student_id, resolved_org_id
+
+
+def _epoch_ms(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return None
+    return None
+
+
+def _fritids_day_record(payload: Any, target: dt.date) -> tuple[int, int, int]:
+    """Find a day and return its raw ``(date, start, end)`` epoch values."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("preschoolschedules"), list):
+        raise SchoolSoftConnectionError(
+            "SchoolSoft returned an unexpected Hämtning/Lämning schedule response."
+        )
+    for record in payload["preschoolschedules"]:
+        if not isinstance(record, dict):
+            continue
+        date_ms = _epoch_ms(record.get("datelong", record.get("dateLong", record.get("date"))))
+        if date_ms is None:
+            continue
+        record_date = dt.datetime.fromtimestamp(
+            date_ms / 1000, tz=ZoneInfo("Europe/Stockholm")
+        ).date()
+        if record_date != target:
+            continue
+        start_ms = _epoch_ms(record.get("startTime"))
+        end_ms = _epoch_ms(record.get("endTime"))
+        if start_ms is None or end_ms is None or start_ms <= 0 or end_ms <= 0:
+            raise ValueError(
+                f"{target.isoformat()} has no pickup/drop-off times. The comment was "
+                "not changed because the legacy SchoolSoft API replaces the whole day."
+            )
+        return date_ms, start_ms, end_ms
+    raise ValueError(
+        f"No Hämtning/Lämning schedule exists for {target.isoformat()}. Add the day's "
+        "pickup/drop-off times in SchoolSoft before setting its comment."
+    )
+
+
 async def _fetch_attachment(
     app: AppContext,
     *,
@@ -360,6 +438,61 @@ async def set_active_child(
         await _select_child(app, student_id, org_id=org_id)
         payload = await app.client.fetch_json(SchoolSoftClient.PARENT_HEADER_PATH)
     return _stamp(parse_parent_header(payload, school=app.settings.school))
+
+
+@mcp.tool()
+async def set_fritids_day_comment(
+    ctx: Context[Any, AppContext, Any],
+    date: str,
+    comment: str,
+    student_id: int | None = None,
+) -> FritidsDayCommentResult:
+    """Write or clear the guardian comment for one Hämtning/Lämning day.
+
+    ``date`` must be an exact ISO date (YYYY-MM-DD). The comment belongs to
+    the childcare/fritids schedule day shown under Hämtning/Lämning; it is
+    not the separate weekly absence-report comment. Pass ``comment=""`` to
+    clear existing text. On a multi-child account, pass ``student_id`` from
+    ``list_children()``.
+    """
+    try:
+        parsed_date = dt.date.fromisoformat(date)
+    except ValueError as err:
+        raise ValueError("date must be an ISO date in YYYY-MM-DD format") from err
+    if parsed_date.isoformat() != date:
+        raise ValueError("date must be an ISO date in YYYY-MM-DD format")
+    if len(comment) > 100:
+        raise ValueError("comment must be at most 100 characters")
+
+    app = _app(ctx)
+    async with app.lock:
+        resolved_student_id, org_id = await _fritids_write_context(app, student_id)
+        iso_year, iso_week, _ = parsed_date.isocalendar()
+        schedule = await app.client.get_fritids_schedule(
+            week=iso_week,
+            year=iso_year,
+            student_id=resolved_student_id,
+            org_id=org_id,
+        )
+        date_ms, start_time_ms, end_time_ms = _fritids_day_record(schedule, parsed_date)
+        await app.client.set_fritids_day_comment(
+            date_ms=date_ms,
+            start_time_ms=start_time_ms,
+            end_time_ms=end_time_ms,
+            comment=comment,
+            student_id=resolved_student_id,
+            org_id=org_id,
+        )
+    return _stamp(
+        FritidsDayCommentResult(
+            school=app.settings.school,
+            date=date,
+            comment=comment,
+            student_id=resolved_student_id,
+            org_id=org_id,
+            cleared=comment == "",
+        )
+    )
 
 
 @mcp.tool()

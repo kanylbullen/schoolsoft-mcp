@@ -67,6 +67,7 @@ tests/
 | `get_attendance` | Experimental  | Low        | Needs real-school HTML sample  |
 | `get_news`       | Experimental  | Low        | Needs real-school HTML sample  |
 | `get_messages`   | Experimental  | Low        | Needs real-school HTML sample  |
+| `set_fritids_day_comment` | Experimental | Medium | Needs live parent-account verification |
 | `dump_page`      | Debug         | n/a        | Stable contract; keep simple   |
 
 Experimental tools intentionally return a `note` field when they can't
