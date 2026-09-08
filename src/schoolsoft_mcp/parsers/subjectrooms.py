@@ -574,30 +574,54 @@ def first_lines(body: str, limit: int = 200) -> str:
 def activity_for_lesson(lesson: Any, plannings: list[Any]) -> int:
     """Best-effort ``activity_id`` for a schedule lesson.
 
-    The calendar endpoint does not return ``activityId`` on lessons, so the
-    join back to a planning goes through the subject name. SchoolSoft
-    abbreviates it differently in the two places ("ID" on the schedule,
-    "Idrott och hälsa" on the planning), so this matches on prefix in both
-    directions and returns ``-1`` when nothing matches — which simply means
-    no planning lines are attached to that lesson, not that none exist.
+    The calendar endpoint returns no ``activityId`` on lessons, so the join
+    back to a planning goes through the subject name — and SchoolSoft names
+    the same subject differently in the two places. The schedule carries a
+    short code in ``subject`` ("ID", "BI") and the full name in ``notes``
+    ("Idrott", "Biologi"); the planning carries a third form ("Idrott och
+    hälsa").
+
+    Matching is deliberately strict, and prefers the full name:
+
+    - The full name wins outright. If it matches nothing, we stop — we do
+      **not** retry with the short code.
+    - A prefix match must be unambiguous across all the child's plannings.
+
+    Both rules exist because the short code is dangerously lossy: "BI"
+    (Biologi) is a prefix of "Bild", so a permissive match hangs the art
+    planning off the biology lesson — telling a parent that biology is doing
+    a composition exercise. A missing attachment is a gap the reader can see;
+    a wrong one is a gap they cannot.
+
+    Returns ``-1`` when nothing matches unambiguously.
     """
     subject = (getattr(lesson, "subject", "") or "").strip().lower()
     notes = (getattr(lesson, "notes", "") or "").strip().lower()
-    if not subject and not notes:
-        return -1
-    for item in plannings:
-        if item.activity_id is None:
-            continue
-        target = (item.subject or "").strip().lower()
-        if not target:
-            continue
-        for candidate in (subject, notes):
-            if not candidate:
-                continue
-            if candidate == target or target.startswith(candidate) or (
-                candidate.startswith(target)
-            ):
-                return int(item.activity_id)
+    candidates = [c for c in (notes, subject) if c]
+    # The full name, when SchoolSoft gave us one, is the only candidate.
+    if notes and notes != subject:
+        candidates = [notes]
+
+    usable = [
+        p for p in plannings
+        if p.activity_id is not None and (p.subject or "").strip()
+    ]
+    for candidate in candidates:
+        exact = {
+            int(p.activity_id)
+            for p in usable
+            if (p.subject or "").strip().lower() == candidate
+        }
+        if len(exact) == 1:
+            return exact.pop()
+        prefixed = {
+            int(p.activity_id)
+            for p in usable
+            if (target := (p.subject or "").strip().lower())
+            and (target.startswith(candidate) or candidate.startswith(target))
+        }
+        if len(prefixed) == 1:
+            return prefixed.pop()
     return -1
 
 

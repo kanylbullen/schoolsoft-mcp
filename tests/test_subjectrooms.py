@@ -443,3 +443,40 @@ class TestWeekLineHygiene:
     def test_identical_lines_are_collapsed(self) -> None:
         body = "v.37 Catch the flag\nv.37 Catch the flag"
         assert sr.lines_for_week(body, 37) == ["v.37 Catch the flag"]
+
+
+class TestActivityJoinPrecision:
+    """The short subject code is lossy; a wrong planning is worse than none."""
+
+    BILD = _planning(title="Terminsplanering", subject="Bild", activity_id=334, body="x")
+    BIOLOGI = _planning(title="Cellen", subject="Biologi", activity_id=296, body="y")
+
+    def test_bi_does_not_pick_up_bild(self) -> None:
+        # "bild".startswith("bi") — a permissive prefix match hung the art
+        # planning off the biology lesson on the live page.
+        lesson = _FakeLesson(subject="BI", notes="Biologi")
+        assert sr.activity_for_lesson(lesson, [self.BILD]) == -1
+
+    def test_bi_still_finds_biologi(self) -> None:
+        lesson = _FakeLesson(subject="BI", notes="Biologi")
+        assert sr.activity_for_lesson(lesson, [self.BILD, self.BIOLOGI]) == 296
+
+    def test_bild_still_matches_bild(self) -> None:
+        lesson = _FakeLesson(subject="Bild", notes="Bild")
+        assert sr.activity_for_lesson(lesson, [self.BILD, self.BIOLOGI]) == 334
+
+    def test_id_still_matches_idrott_och_halsa_by_prefix(self) -> None:
+        lesson = _FakeLesson(subject="ID", notes="Idrott")
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING, self.BILD]) == 379
+
+    def test_ambiguous_prefix_refuses_to_guess(self) -> None:
+        other = _planning(title="Idrottsdag", subject="Idrottslära", activity_id=999, body="z")
+        lesson = _FakeLesson(subject="XX", notes="Idrott")
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING, other]) == -1
+
+    def test_code_is_not_retried_when_the_full_name_missed(self) -> None:
+        # notes says Spanska, no Spanska planning exists; falling back to the
+        # code "Sp" would match "Språkval" and attach someone else's plan.
+        sprakval = _planning(title="Franska", subject="Språkval", activity_id=363, body="q")
+        lesson = _FakeLesson(subject="Sp", notes="Spanska")
+        assert sr.activity_for_lesson(lesson, [sprakval]) == -1
