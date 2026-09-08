@@ -66,6 +66,8 @@ tests/
 | `get_homework`   | Experimental  | Low        | Needs real-school HTML sample  |
 | `get_attendance` | Experimental  | Low        | Needs real-school HTML sample  |
 | `get_news`       | Experimental  | Low        | Needs real-school HTML sample  |
+| `get_planning`   | Stable        | High       | REST; body from planning_parts |
+| `get_day_briefing`| Stable       | High       | Pure join over the tools above |
 | `get_messages`   | Experimental  | Low        | Needs real-school HTML sample  |
 | `dump_page`      | Debug         | n/a        | Stable contract; keep simple   |
 

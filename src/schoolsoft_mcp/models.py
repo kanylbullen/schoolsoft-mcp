@@ -168,6 +168,26 @@ class HomeworkItem(BaseModel):
     description: str = ""
     assigned: str | None = None
 
+    teacher: str = Field(default="", description="Teacher who published it.")
+    start_date: str | None = Field(
+        default=None, description="ISO YYYY-MM-DD start, from the grid endpoint."
+    )
+    end_date: str | None = Field(
+        default=None,
+        description="ISO YYYY-MM-DD end. More reliable than ``due``, which is "
+        "parsed out of a prose subtitle.",
+    )
+    publish_date: str | None = None
+    status: str = Field(default="", description="ONGOING / EXPIRED.")
+    body: str = Field(
+        default="",
+        description="The assignment's full description, HTML flattened to plain "
+        "text. Empty unless the tool was called with include_body=True.",
+    )
+    material: list[MaterialLink] = Field(
+        default_factory=list, description="Files and links attached to the assignment."
+    )
+
 
 class HomeworkList(BaseModel):
     school: str
@@ -203,7 +223,41 @@ class PlanningPart(BaseModel):
         default=None,
         description="ID of the parent planning block this part belongs to.",
     )
-    activity_id: int | None = None
+    activity_id: int | None = Field(
+        default=None,
+        description="Subject-room ID. Join key for get_subject_rooms() and for "
+        "everything else hanging off the same subject.",
+    )
+    teacher: str = Field(default="", description="Teacher who published the planning.")
+    start_date: str | None = Field(
+        default=None, description="ISO YYYY-MM-DD start, when known."
+    )
+    end_date: str | None = Field(
+        default=None, description="ISO YYYY-MM-DD end, when known."
+    )
+    publish_date: str | None = None
+    status: str = Field(
+        default="", description='Lifecycle from SchoolSoft: ONGOING / EXPIRED.'
+    )
+    body: str = Field(
+        default="",
+        description="The teacher's actual planning text, HTML flattened to plain "
+        "text. Empty when the tool was called with include_body=False. This is "
+        "where per-week detail lives — which activity, which meeting point, what "
+        "to bring.",
+    )
+    week_lines: list[str] = Field(
+        default_factory=list,
+        description="Lines of ``body`` that explicitly name the requested ISO "
+        'week, e.g. "v.37 Orientering (samling vid klubbstugan)". Term-long '
+        "plannings are in force every day but only one line applies to any "
+        "given week — this is that line. Empty when the body is not organised "
+        "by week, in which case read ``body``.",
+    )
+    material: list[MaterialLink] = Field(
+        default_factory=list,
+        description="Files and links attached to the planning.",
+    )
 
 
 class PlanningList(BaseModel):
@@ -456,3 +510,185 @@ class AttachmentText(BaseModel):
         "next ``read_attachment_text`` call to continue reading.",
     )
     note: str | None = None
+
+
+class MaterialLink(BaseModel):
+    """A file or link a teacher attached to a planning or assignment."""
+
+    kind: str = Field(description='"file" or "link".')
+    name: str = ""
+    url: str | None = None
+    file_id: int | None = Field(
+        default=None,
+        description="Pass to ``download_material_file`` together with the "
+        "planning/assignment ID this material hangs off.",
+    )
+
+
+class SubjectRoom(BaseModel):
+    """One ämnesrum — a subject the child is enrolled in.
+
+    ``activity_id`` is the join key across the whole modern planning
+    surface: plannings, assignments, teachers and lessons all carry it.
+    """
+
+    activity_id: int
+    subject: str = ""
+    groups: list[str] = Field(default_factory=list)
+    color: str = ""
+    has_access: bool = Field(
+        default=False,
+        description="Whether the room's own page is open to this account.",
+    )
+    teachers: list[str] = Field(default_factory=list)
+
+
+class SubjectRoomList(BaseModel):
+    school: str
+    rooms: list[SubjectRoom]
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class PlanningDetail(BaseModel):
+    """One planning with its full body — the teacher's actual text."""
+
+    part_id: int | None = None
+    planning_id: int | None = None
+    activity_id: int | None = None
+    title: str = ""
+    subject: str = ""
+    teacher: str = ""
+    date_range: str = Field(
+        default="", description="Prose range from SchoolSoft, e.g. 'onsdag 19 augusti "
+        "2026 - torsdag 31 december 2026'."
+    )
+    start_date: str | None = None
+    end_date: str | None = None
+    publish_date: str | None = None
+    status: str = ""
+    read: bool = False
+    body: str = Field(
+        default="", description="Full planning text, HTML flattened to plain text."
+    )
+    week_lines: list[str] = Field(
+        default_factory=list,
+        description="Lines of ``body`` naming the requested week, when one was given.",
+    )
+    material: list[MaterialLink] = Field(default_factory=list)
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class ExamEntry(BaseModel):
+    """An announced exam (Prov) from the exam schedule."""
+
+    exam_id: int | None = None
+    title: str = ""
+    kind: str = Field(default="", description='Type label, typically "Prov".')
+    start: str | None = Field(
+        default=None,
+        description="ISO datetime the announcement becomes visible — NOT when "
+        "the exam is written. The exam's own date is on the matching "
+        "assignment in ``get_homework``.",
+    )
+    end: str | None = Field(
+        default=None, description="ISO datetime the announcement stops showing."
+    )
+
+
+class ExamSchedule(BaseModel):
+    school: str
+    exams: list[ExamEntry]
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class LessonDetail(BaseModel):
+    """Room, teachers and group for a single scheduled lesson."""
+
+    lesson_id: int
+    title: str = ""
+    room: str = ""
+    teachers: list[str] = Field(default_factory=list)
+    groups: str = ""
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class DayLesson(BaseModel):
+    """A lesson on the briefing's day, with what is planned for it."""
+
+    start: str = ""
+    end: str = ""
+    subject: str = ""
+    teacher: str = ""
+    room: str = ""
+    activity_id: int | None = None
+    attendance_status: str = ""
+    is_break: bool = False
+    planning_titles: list[str] = Field(
+        default_factory=list,
+        description="Titles of plannings covering this lesson's subject. A "
+        "non-empty list with an empty ``plannings`` means a planning exists "
+        "but says nothing about this particular week.",
+    )
+    plannings: list[str] = Field(
+        default_factory=list,
+        description="What the planning says for this week — the week-numbered "
+        "line when the teacher wrote one, otherwise the opening of the body. "
+        "The sentence a parent needs before the child leaves the house.",
+    )
+
+
+class DayBriefing(BaseModel):
+    """Everything that matters about one school day, joined server-side.
+
+    Assembled from the schedule, plannings (with bodies), assignments,
+    exams, unreported absence and recent news in one call. The point is
+    that the joining is *not* left to the caller: the failure mode this
+    replaces is a model fetching the schedule, seeing "Idrott", and never
+    fetching the planning that says where Idrott is that week.
+    """
+
+    school: str
+    date: str = Field(description="ISO date the briefing is for.")
+    weekday: str = Field(description="Swedish weekday name.")
+    iso_week: int
+    iso_year: int
+    student_id: int | None = None
+    student_name: str = ""
+    is_school_day: bool = Field(
+        default=True, description="False when the schedule has no lessons that day."
+    )
+    lessons: list[DayLesson] = Field(default_factory=list)
+    prepare: list[str] = Field(
+        default_factory=list,
+        description="Preparation-critical items derived from the day: gym kit for "
+        "Idrott, swimming, outings, exams, anything the plannings flag. Each entry "
+        "is a ready-to-read sentence.",
+    )
+    due_today: list[HomeworkItem] = Field(default_factory=list)
+    due_soon: list[HomeworkItem] = Field(
+        default_factory=list, description="Due within the next 7 days."
+    )
+    plannings: list[PlanningDetail] = Field(
+        default_factory=list,
+        description="Plannings in force on this date, with bodies and week lines.",
+    )
+    exams: list[ExamEntry] = Field(default_factory=list)
+    unreported_absence: list[UnreportedAbsenceEvent] = Field(default_factory=list)
+    news: list[NewsItem] = Field(
+        default_factory=list, description="News/veckobrev from the last 14 days."
+    )
+    errors: list[str] = Field(
+        default_factory=list,
+        description="Sections that could not be fetched. The briefing is still "
+        "returned — a partial day is more useful than an exception.",
+    )
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+HomeworkItem.model_rebuild()
+PlanningPart.model_rebuild()
