@@ -28,18 +28,26 @@ from .models import (
     AttendanceReport,
     ChildList,
     ContactList,
+    DayBriefing,
+    ExamSchedule,
     GradeList,
+    HomeworkItem,
     HomeworkList,
+    LessonDetail,
     LibraryFileList,
     LunchWeek,
     MessageList,
     NewsFeed,
     NewsItem,
+    PlanningDetail,
     PlanningList,
+    PlanningPart,
     ScheduleWeek,
     SchoolInformation,
+    SubjectRoomList,
     UnreportedAbsenceList,
 )
+from .parsers import subjectrooms as sr
 from .parsers.attachments import (
     build_download_path,
     extract_text,
@@ -384,6 +392,7 @@ async def dump_json(
 async def get_lunch_menu(
     ctx: Context[Any, AppContext, Any],
     week: int | None = None,
+    student_id: int | None = None,
 ) -> LunchWeek:
     """Return the lunch menu for the given ISO week (defaults to current week).
 
@@ -395,6 +404,7 @@ async def get_lunch_menu(
     rest_path = LUNCH_REST_PATH_TEMPLATE.format(week=actual_week)
 
     async with app.lock:
+        await _select_child(app, student_id)
         try:
             payload = await app.client.fetch_json(rest_path)
         except (
@@ -423,6 +433,7 @@ async def get_schedule(
     ctx: Context[Any, AppContext, Any],
     week: int | None = None,
     year: int | None = None,
+    student_id: int | None = None,
 ) -> ScheduleWeek:
     """Return the schedule for the given ISO week (defaults to current week).
 
@@ -443,6 +454,7 @@ async def get_schedule(
     )
 
     async with app.lock:
+        await _select_child(app, student_id)
         try:
             lessons_payload = await app.client.fetch_json(lessons_path)
         except (
@@ -495,6 +507,7 @@ async def get_schedule(
 @mcp.tool()
 async def get_school_info(
     ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
 ) -> SchoolInformation:
     """Return the Skolinformation page as plain text.
 
@@ -504,12 +517,16 @@ async def get_school_info(
     """
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, SCHOOL_INFO_PATHS)
     return _stamp(parse_school_info(html, school=app.settings.school))
 
 
 @mcp.tool()
-async def get_contacts(ctx: Context[Any, AppContext, Any]) -> ContactList:
+async def get_contacts(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> ContactList:
     """Return the class contact list for the active child.
 
     Maps to Skolinfo → Kontaktlistor. Each :class:`Contact` carries
@@ -518,6 +535,7 @@ async def get_contacts(ctx: Context[Any, AppContext, Any]) -> ContactList:
     """
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, CONTACTS_PATHS)
     return _stamp(parse_contacts(html, school=app.settings.school))
 
@@ -525,6 +543,7 @@ async def get_contacts(ctx: Context[Any, AppContext, Any]) -> ContactList:
 @mcp.tool()
 async def get_library_files(
     ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
 ) -> LibraryFileList:
     """List files in the school's shared library / filer & länkar.
 
@@ -536,12 +555,16 @@ async def get_library_files(
     """
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, LIBRARY_PATHS)
     return _stamp(parse_library_files(html, school=app.settings.school))
 
 
 @mcp.tool()
-async def get_grades(ctx: Context[Any, AppContext, Any]) -> GradeList:
+async def get_grades(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> GradeList:
     """Return the subject-grade report for the active child.
 
     Maps to Elevdokument → Betyg in the SchoolSoft UI. Each
@@ -553,6 +576,7 @@ async def get_grades(ctx: Context[Any, AppContext, Any]) -> GradeList:
     """
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, GRADES_PATHS)
     return _stamp(parse_grades(html, school=app.settings.school))
 
@@ -562,36 +586,143 @@ async def get_homework(
     ctx: Context[Any, AppContext, Any],
     week: int | None = None,
     year: int | None = None,
+    student_id: int | None = None,
+    include_body: bool = True,
+    max_body_chars: int = 4000,
 ) -> HomeworkList:
-    """Return assignments / läxor for the given ISO week (defaults to current).
+    """Return assignments / läxor / prov for the given ISO week.
 
-    Uses SchoolSoft's REST endpoint when available and falls back to the
-    legacy JSP page if REST returns a non-2xx. Each item carries the raw
-    subtitle plus the parsed-out subject/kind/date_range/due.
+    Each item carries the assignment's full text in ``body`` (what the
+    pupil is actually meant to do), plus machine-readable
+    ``start_date``/``end_date`` and the teacher's name — the week-scoped
+    start-page endpoint alone gives none of those, only a prose subtitle.
+
+    Set ``include_body=False`` to skip one request per assignment.
     """
     app = _app(ctx)
     now = _now_as_of()
     actual_week = week if week is not None else now.iso_week
     actual_year = year if year is not None else now.iso_year
-    params = {"week": str(actual_week), "year": str(actual_year)}
+    first, last = sr.week_bounds(actual_year, actual_week)
 
     async with app.lock:
+        await _select_child(app, student_id)
+        usertype = app.settings.usertype
         try:
-            payload = await app.client.fetch_json(HOMEWORK_REST_PATH, params=params)
+            rows = await app.client.fetch_json(
+                sr.path(sr.ASSIGNMENT_ROWS, usertype)
+            )
         except (
             SchoolSoftConnectionError,
             SchoolSoftAuthError,
             httpx.HTTPStatusError,
         ) as err:
-            logger.debug("Homework REST failed (%s), falling back to JSP", err)
-            html = await _fetch_first(app.client, HOMEWORK_PATHS)
-            return _stamp(parse_homework(html, school=app.settings.school))
+            logger.debug("Assignment grid failed (%s), falling back", err)
+            return _stamp(
+                await _homework_from_start_page(app, actual_week, actual_year)
+            )
 
+        items: list[HomeworkItem] = []
+        for entry in rows if isinstance(rows, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            row = sr.parse_assignment_row(entry)
+            start = sr.parse_iso_date(row["start_date"])
+            end = sr.parse_iso_date(row["end_date"])
+            # An assignment with no dates at all can't be placed in a week;
+            # dropping it is better than showing it every week forever.
+            if start is None and end is None:
+                continue
+            if not sr.overlaps(start, end, first, last):
+                continue
+            view: dict[str, Any] = {}
+            if include_body and row["assignment_id"] is not None:
+                view = await _assignment_view(
+                    app, row["assignment_id"], max_body_chars
+                )
+            items.append(
+                HomeworkItem(
+                    title=view.get("title") or row["title"],
+                    subject=view.get("subject") or row["subject"],
+                    kind=view.get("kind") or row["kind"],
+                    date_range=view.get("subtitle", ""),
+                    subtitle=view.get("subtitle", ""),
+                    due=end.isoformat() if end else None,
+                    read=row["read"],
+                    submission_status=row["submission_status"],
+                    result_status=row["result_status"],
+                    assignment_id=row["assignment_id"],
+                    activity_id=row["activity_id"],
+                    teacher=row["teacher"],
+                    start_date=start.isoformat() if start else None,
+                    end_date=end.isoformat() if end else None,
+                    publish_date=row["publish_date"],
+                    status=row["status"],
+                    body=view.get("body", ""),
+                    description=view.get("body", "") or row["title"],
+                )
+            )
+
+    items.sort(key=lambda i: (i.end_date or "", i.subject))
     return _stamp(
-        parse_homework_json(
-            payload, school=app.settings.school, week=actual_week, year=actual_year
+        HomeworkList(
+            school=app.settings.school,
+            items=items,
+            week=actual_week,
+            year=actual_year,
+            note=None
+            if items
+            else (
+                f"No assignments overlap week {actual_week}/{actual_year}. On a "
+                "parent account, check that the right child is selected — pass "
+                "student_id."
+            ),
         )
     )
+
+
+async def _assignment_view(
+    app: AppContext, assignment_id: int, max_body_chars: int | None
+) -> dict[str, Any]:
+    """Fetch one assignment's description. Caller must hold ``app.lock``."""
+    try:
+        payload = await app.client.fetch_json(
+            sr.path(
+                sr.ASSIGNMENT_VIEW, app.settings.usertype, assignment_id=assignment_id
+            )
+        )
+    except (
+        SchoolSoftConnectionError,
+        SchoolSoftAuthError,
+        httpx.HTTPStatusError,
+    ) as err:
+        logger.warning("Assignment %s body unavailable: %s", assignment_id, err)
+        return {}
+    return sr.parse_detail_view(payload, max_body_chars=max_body_chars)
+
+
+async def _homework_from_start_page(
+    app: AppContext, week: int, year: int
+) -> HomeworkList:
+    """Legacy path: week-scoped titles only. Caller must hold ``app.lock``."""
+    params = {"week": str(week), "year": str(year)}
+    try:
+        payload = await app.client.fetch_json(HOMEWORK_REST_PATH, params=params)
+    except (
+        SchoolSoftConnectionError,
+        SchoolSoftAuthError,
+        httpx.HTTPStatusError,
+    ) as err:
+        logger.debug("Homework REST failed (%s), falling back to JSP", err)
+        html = await _fetch_first(app.client, HOMEWORK_PATHS)
+        return parse_homework(html, school=app.settings.school)
+    result = parse_homework_json(
+        payload, school=app.settings.school, week=week, year=year
+    )
+    result.note = ((result.note + " ") if result.note else "") + (
+        "Fetched from the legacy start-page endpoint: no bodies, no ISO dates."
+    )
+    return result
 
 
 @mcp.tool()
@@ -599,30 +730,327 @@ async def get_planning(
     ctx: Context[Any, AppContext, Any],
     week: int | None = None,
     year: int | None = None,
+    student_id: int | None = None,
+    include_body: bool = True,
+    max_body_chars: int = 4000,
 ) -> PlanningList:
-    """Return lesson plans (planeringar) for the given ISO week.
+    """Return lesson plans (planeringar) in force during the given ISO week.
 
-    Each ``PlanningPart`` is one piece of a larger planning block (a
-    teacher's plan for a course over a date range). The subtitle is
-    parsed into subject + kind + date_range, with the raw text kept too.
+    **This is where "what is Idrott this week and where do they meet?"
+    lives.** Each planning carries the teacher's own text in ``body``, and
+    ``week_lines`` pulls out the line(s) naming the requested week — a
+    term-long planning is in force every school day but only one of its
+    lines is about any given week.
+
+    Two sources are merged:
+
+    - ``ps/subjectroom/plannings/grid/rows`` — every planning with real ISO
+      ``start_date``/``end_date``, teacher and subject. Filtered here to
+      those overlapping the requested week, which keeps long-running term
+      plans (the ones carrying the week-by-week detail) instead of dropping
+      them the way a week-scoped query does.
+    - ``ps/planning_parts/<id>/view`` — the body, fetched per planning when
+      ``include_body`` is set.
+
+    Falls back to the legacy week-scoped start-page list if the grid
+    endpoint is unavailable; that path returns titles only, and says so in
+    ``note``.
+
+    Set ``include_body=False`` for a cheap listing. ``max_body_chars``
+    truncates each body (term plans can run to several pages).
     """
     app = _app(ctx)
     now = _now_as_of()
     actual_week = week if week is not None else now.iso_week
     actual_year = year if year is not None else now.iso_year
-    params = {"week": str(actual_week), "year": str(actual_year)}
+    first, last = sr.week_bounds(actual_year, actual_week)
 
     async with app.lock:
-        payload = await app.client.fetch_json(PLANNING_REST_PATH, params=params)
+        await _select_child(app, student_id)
+        usertype = app.settings.usertype
+        try:
+            rows = await app.client.fetch_json(
+                sr.path(sr.PLANNING_ROWS, usertype)
+            )
+        except (
+            SchoolSoftConnectionError,
+            SchoolSoftAuthError,
+            httpx.HTTPStatusError,
+        ) as err:
+            logger.debug("Planning grid failed (%s), falling back to start-page", err)
+            return _stamp(
+                await _planning_from_start_page(app, actual_week, actual_year)
+            )
+
+        items: list[PlanningPart] = []
+        for entry in rows if isinstance(rows, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            row = sr.parse_planning_row(entry)
+            if not sr.overlaps(
+                sr.parse_iso_date(row["start_date"]),
+                sr.parse_iso_date(row["end_date"]),
+                first,
+                last,
+            ):
+                continue
+            view: dict[str, Any] = {}
+            if include_body and row["part_id"] is not None:
+                view = await _planning_part_view(
+                    app, row["part_id"], actual_week, max_body_chars
+                )
+            items.append(
+                PlanningPart(
+                    title=view.get("title") or row["title"],
+                    subject=view.get("subject") or row["subject"],
+                    kind="Planering",
+                    date_range=view.get("subtitle", ""),
+                    subtitle=view.get("subtitle", ""),
+                    read=row["read"],
+                    part_id=row["part_id"],
+                    planning_id=row["planning_id"],
+                    activity_id=row["activity_id"],
+                    teacher=row["teacher"],
+                    start_date=row["start_date"],
+                    end_date=row["end_date"],
+                    publish_date=view.get("publish_date") or row["publish_date"],
+                    status=row["status"],
+                    body=view.get("body", ""),
+                    week_lines=view.get("week_lines") or [],
+                )
+            )
+
+    items.sort(key=lambda i: (i.start_date or "", i.subject))
     return _stamp(
-        parse_planning_json(
-            payload, school=app.settings.school, week=actual_week, year=actual_year
+        PlanningList(
+            school=app.settings.school,
+            items=items,
+            week=actual_week,
+            year=actual_year,
+            note=None
+            if items
+            else (
+                f"No plannings overlap week {actual_week}/{actual_year}. Either "
+                "no teacher has published one, or no child is selected — pass "
+                "student_id on a parent account."
+            ),
+        )
+    )
+
+
+async def _planning_part_view(
+    app: AppContext, part_id: int, week: int | None, max_body_chars: int | None
+) -> dict[str, Any]:
+    """Fetch one planning part's body. Caller must hold ``app.lock``.
+
+    A body that won't load must not take the whole listing down with it —
+    a planning with a title and no text is still worth showing, and the
+    empty ``body`` is itself the signal that something went wrong.
+    """
+    try:
+        payload = await app.client.fetch_json(
+            sr.path(sr.PLANNING_PART_VIEW, app.settings.usertype, part_id=part_id)
+        )
+    except (
+        SchoolSoftConnectionError,
+        SchoolSoftAuthError,
+        httpx.HTTPStatusError,
+    ) as err:
+        logger.warning("Planning part %s body unavailable: %s", part_id, err)
+        return {}
+    return sr.parse_detail_view(payload, week=week, max_body_chars=max_body_chars)
+
+
+async def _planning_from_start_page(
+    app: AppContext, week: int, year: int
+) -> PlanningList:
+    """Legacy path: titles and subtitles only. Caller must hold ``app.lock``."""
+    payload = await app.client.fetch_json(
+        PLANNING_REST_PATH, params={"week": str(week), "year": str(year)}
+    )
+    result = parse_planning_json(
+        payload, school=app.settings.school, week=week, year=year
+    )
+    result.note = (
+        (result.note + " ") if result.note else ""
+    ) + (
+        "Fetched from the legacy start-page endpoint: titles only, no planning "
+        "bodies. The subject-room grid endpoint was unavailable."
+    )
+    return result
+
+
+@mcp.tool()
+async def get_planning_detail(
+    ctx: Context[Any, AppContext, Any],
+    part_id: int,
+    week: int | None = None,
+    student_id: int | None = None,
+    max_body_chars: int = 20000,
+) -> PlanningDetail:
+    """Return one planning in full, including attached files and links.
+
+    ``part_id`` is the ``part_id`` from ``get_planning``. Pass ``week`` to
+    also get ``week_lines`` — the lines of the body naming that ISO week.
+    Use this when ``get_planning``'s truncated body cut off something you
+    need, or to reach the material a teacher attached.
+    """
+    app = _app(ctx)
+    now = _now_as_of()
+    async with app.lock:
+        await _select_child(app, student_id)
+        usertype = app.settings.usertype
+        payload = await app.client.fetch_json(
+            sr.path(sr.PLANNING_PART_VIEW, usertype, part_id=part_id)
+        )
+        view = sr.parse_detail_view(
+            payload,
+            week=week if week is not None else now.iso_week,
+            max_body_chars=max_body_chars,
+        )
+        row = await _planning_row_for(app, part_id)
+        material = await _material_for(app, part_id)
+
+    return _stamp(sr.parse_planning_detail(view, row=row, material=material))
+
+
+async def _planning_row_for(app: AppContext, part_id: int) -> dict[str, Any]:
+    """Grid metadata (dates, teacher, status) for one part. Lock must be held."""
+    try:
+        rows = await app.client.fetch_json(
+            sr.path(sr.PLANNING_ROWS, app.settings.usertype)
+        )
+    except (
+        SchoolSoftConnectionError,
+        SchoolSoftAuthError,
+        httpx.HTTPStatusError,
+    ) as err:
+        logger.debug("Planning grid unavailable for part %s: %s", part_id, err)
+        return {}
+    for entry in rows if isinstance(rows, list) else []:
+        if isinstance(entry, dict) and entry.get("planningPartId") == part_id:
+            return sr.parse_planning_row(entry)
+    return {}
+
+
+async def _material_for(app: AppContext, section_id: int) -> list[Any]:
+    """Files + links hung on a planning or assignment. Lock must be held."""
+    usertype = app.settings.usertype
+    results = []
+    for template in (sr.MATERIAL_FILES, sr.MATERIAL_LINKS):
+        try:
+            results.append(
+                await app.client.fetch_json(
+                    sr.path(template, usertype, section_id=section_id)
+                )
+            )
+        except (
+            SchoolSoftConnectionError,
+            SchoolSoftAuthError,
+            httpx.HTTPStatusError,
+        ) as err:
+            logger.debug("Material fetch %s failed: %s", template, err)
+            results.append(None)
+    return sr.parse_material(results[0], results[1])
+
+
+@mcp.tool()
+async def get_subject_rooms(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+    include_teachers: bool = True,
+) -> SubjectRoomList:
+    """List the child's subject rooms (ämnesrum) with their teachers.
+
+    Each room's ``activity_id`` is the join key used across the modern
+    planning surface: plannings, assignments and schedule lessons all
+    carry it. Use this to answer "who teaches Idrott?" or to scope
+    ``get_planning`` results to one subject.
+
+    ``include_teachers=False`` skips one request per room.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        usertype = app.settings.usertype
+        payload = await app.client.fetch_json(sr.path(sr.ROOMS_ALL, usertype))
+        result = sr.parse_rooms(payload, school=app.settings.school)
+        if include_teachers:
+            for room in result.rooms:
+                try:
+                    teachers = await app.client.fetch_json(
+                        sr.path(
+                            sr.ROOM_TEACHERS, usertype, activity_id=room.activity_id
+                        )
+                    )
+                except (
+                    SchoolSoftConnectionError,
+                    SchoolSoftAuthError,
+                    httpx.HTTPStatusError,
+                ) as err:
+                    logger.debug("Teachers for room %s failed: %s", room.activity_id, err)
+                    continue
+                room.teachers = sr.parse_teachers(teachers)
+    return _stamp(result)
+
+
+@mcp.tool()
+async def get_exam_schedule(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> ExamSchedule:
+    """Return announced exams (provschema) for the active child.
+
+    Independent of ``get_homework``'s week window: an exam announced for
+    week 39 shows up here in week 37, which is when a family can still do
+    something about it.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        payload = await app.client.fetch_json(
+            sr.path(sr.EXAM_SCHEDULE, app.settings.usertype)
+        )
+    return _stamp(sr.parse_exam_schedule(payload, school=app.settings.school))
+
+
+@mcp.tool()
+async def get_lesson_detail(
+    ctx: Context[Any, AppContext, Any],
+    lesson_id: int,
+    student_id: int | None = None,
+) -> LessonDetail:
+    """Return room, teachers and group for one scheduled lesson.
+
+    ``lesson_id`` is the ``lesson_id`` from ``get_schedule``.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        payload = await app.client.fetch_json(
+            sr.path(sr.LESSON_DETAIL, app.settings.usertype, lesson_id=lesson_id)
+        )
+    teachers = payload.get("teachers") if isinstance(payload, dict) else None
+    return _stamp(
+        LessonDetail(
+            lesson_id=lesson_id,
+            title=(payload or {}).get("title", "") or "",
+            room=(payload or {}).get("room", "") or "",
+            teachers=[
+                t.get("name", "")
+                for t in (teachers or [])
+                if isinstance(t, dict) and t.get("name")
+            ],
+            groups=(payload or {}).get("groups", "") or "",
         )
     )
 
 
 @mcp.tool()
-async def get_attendance(ctx: Context[Any, AppContext, Any]) -> AttendanceReport:
+async def get_attendance(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> AttendanceReport:
     """Return per-week attendance statistics for the active child.
 
     Maps to Frånvaro → Rapport in the SchoolSoft UI. Each ``AttendanceWeek``
@@ -633,6 +1061,7 @@ async def get_attendance(ctx: Context[Any, AppContext, Any]) -> AttendanceReport
     """
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, ATTENDANCE_PATHS)
     return _stamp(parse_attendance(html, school=app.settings.school))
 
@@ -640,6 +1069,7 @@ async def get_attendance(ctx: Context[Any, AppContext, Any]) -> AttendanceReport
 @mcp.tool()
 async def get_unreported_absence(
     ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
 ) -> UnreportedAbsenceList:
     """Return unreported-absence events for the active child.
 
@@ -650,6 +1080,7 @@ async def get_unreported_absence(
     """
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, UNREPORTED_ABSENCE_PATHS)
     return _stamp(parse_unreported_absence(html, school=app.settings.school))
 
@@ -877,12 +1308,229 @@ async def read_attachment_text(
 
 
 @mcp.tool()
-async def get_messages(ctx: Context[Any, AppContext, Any]) -> MessageList:
+async def get_messages(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> MessageList:
     """Return inbox messages (EXPERIMENTAL)."""
     app = _app(ctx)
     async with app.lock:
+        await _select_child(app, student_id)
         html = await _fetch_first(app.client, MESSAGES_PATHS)
     return _stamp(parse_messages(html, school=app.settings.school))
+
+
+@mcp.tool()
+async def get_day_briefing(
+    ctx: Context[Any, AppContext, Any],
+    date: str | None = None,
+    student_id: int | None = None,
+    news_days: int = 14,
+    max_body_chars: int = 2000,
+) -> DayBriefing:
+    """Everything about one school day for one child, joined in a single call.
+
+    Pass ``date`` as ISO ``YYYY-MM-DD`` (defaults to today). Returns the
+    day's lessons **with the planning text that applies to that week
+    attached to each lesson**, assignments due today and within the week,
+    announced exams, unreported absence, and news/veckobrev from the last
+    ``news_days`` days.
+
+    Prefer this over calling ``get_schedule`` + ``get_planning`` +
+    ``get_homework`` separately when the question is "what does this child
+    need today". The joining is the whole point: a schedule row says
+    "Idrott 08:20", and only the subject's planning says the class is
+    meeting at the disc-golf course rather than at school. Reading them
+    apart is how that detail goes missing.
+
+    ``prepare`` is the short list a parent acts on before the child leaves:
+    lessons that need kit or a different meeting point, exams, and work due.
+    Every entry is derived from fetched data — when a preparation-heavy
+    lesson has no published planning, it says so rather than guessing.
+
+    A section that fails to load is reported in ``errors``; the rest of the
+    briefing is still returned.
+    """
+    app = _app(ctx)
+    try:
+        day = dt.date.fromisoformat(date) if date else dt.date.today()
+    except ValueError as err:
+        raise ValueError(
+            f"date must be ISO YYYY-MM-DD, got {date!r}"
+        ) from err
+    iso_year, iso_week, iso_weekday = day.isocalendar()
+    day_key = sr.DAY_KEYS[iso_weekday - 1]
+    errors: list[str] = []
+
+    student_name = ""
+    try:
+        children = await list_children(ctx)
+        if student_id is None:
+            match = next((c for c in children.children if c.active), None)
+        else:
+            match = next(
+                (c for c in children.children if c.student_id == student_id), None
+            )
+        if match is not None:
+            student_name = match.name
+            if student_id is None:
+                student_id = match.student_id
+    except Exception as err:  # a name is a nicety, not the payload
+        errors.append(f"list_children: {type(err).__name__}")
+
+    async def _section(label: str, coro: Any, fallback: Any) -> Any:
+        try:
+            return await coro
+        except Exception as err:  # partial day beats no day
+            logger.warning("Briefing section %s failed: %s", label, err)
+            errors.append(f"{label}: {type(err).__name__}")
+            return fallback
+
+    schedule = await _section(
+        "schedule",
+        get_schedule(ctx, week=iso_week, year=iso_year, student_id=student_id),
+        None,
+    )
+    plannings = await _section(
+        "planning",
+        get_planning(
+            ctx,
+            week=iso_week,
+            year=iso_year,
+            student_id=student_id,
+            include_body=True,
+            max_body_chars=max_body_chars,
+        ),
+        None,
+    )
+    homework = await _section(
+        "homework",
+        get_homework(
+            ctx,
+            week=iso_week,
+            year=iso_year,
+            student_id=student_id,
+            include_body=True,
+            max_body_chars=max_body_chars,
+        ),
+        None,
+    )
+    exams = await _section("exams", get_exam_schedule(ctx, student_id=student_id), None)
+    absence = await _section(
+        "unreported_absence", get_unreported_absence(ctx, student_id=student_id), None
+    )
+    news = await _section("news", get_news(ctx, student_id=student_id), None)
+
+    # --- lessons on the day, with their subject's planning attached ---------
+    planning_items = list(getattr(plannings, "items", []) or [])
+    lessons = sr.day_lessons(
+        getattr(schedule, "lessons", []) or [], planning_items, day_key
+    )
+
+    # --- what needs doing before leaving the house --------------------------
+    prepare = sr.preparation_notes(lessons, week=iso_week)
+
+    # --- assignments -------------------------------------------------------
+    due_today: list[HomeworkItem] = []
+    due_soon: list[HomeworkItem] = []
+    horizon = day + dt.timedelta(days=7)
+    for item in getattr(homework, "items", []) or []:
+        end = sr.parse_iso_date(item.end_date or item.due)
+        if end is None:
+            continue
+        if end == day:
+            due_today.append(item)
+        elif day < end <= horizon:
+            due_soon.append(item)
+    tomorrow = day + dt.timedelta(days=1)
+    for item in due_today:
+        prepare.append(
+            f"Ska vara klart idag: {item.title}"
+            + (f" ({item.subject})" if item.subject else "")
+        )
+    for item in due_soon:
+        if sr.parse_iso_date(item.end_date or item.due) == tomorrow:
+            prepare.append(
+                f"Ska vara klart imorgon: {item.title}"
+                + (f" ({item.subject})" if item.subject else "")
+            )
+
+    # --- announced exams still inside their visibility window ---------------
+    # Deliberately *not* fed into ``prepare``: the exam schedule's dates are
+    # the window the announcement is shown in, not when the exam is written.
+    # "Prov fredag v. 39" is listed from 7 Sep, and treating that as the exam
+    # date would raise the alarm two weeks early, every day. The real date is
+    # on the matching assignment, which reaches ``prepare`` via due_today.
+    upcoming_exams = []
+    for exam in getattr(exams, "exams", []) or []:
+        start = sr.parse_iso_date(exam.start)
+        end = sr.parse_iso_date(exam.end)
+        if start is not None and start > day + dt.timedelta(days=30):
+            continue
+        if end is not None and end < day:
+            continue
+        upcoming_exams.append(exam)
+
+    # --- recent news --------------------------------------------------------
+    cutoff = day - dt.timedelta(days=news_days)
+    recent_news = []
+    for item in getattr(news, "items", []) or []:
+        published = sr.parse_iso_date(item.published or item.date)
+        if published is None or published >= cutoff:
+            recent_news.append(item)
+
+    return _stamp(
+        DayBriefing(
+            school=app.settings.school,
+            date=day.isoformat(),
+            weekday=sr.DAY_NAMES_SV.get(day_key, day_key),
+            iso_week=iso_week,
+            iso_year=iso_year,
+            student_id=student_id,
+            student_name=student_name,
+            is_school_day=any(not lesson.is_break for lesson in lessons),
+            lessons=lessons,
+            prepare=prepare,
+            due_today=due_today,
+            due_soon=due_soon,
+            plannings=[
+                sr.parse_planning_detail(
+                    {
+                        "title": item.title,
+                        "subject": item.subject,
+                        "subtitle": item.subtitle,
+                        "publish_date": item.publish_date,
+                        "body": item.body,
+                        "week_lines": item.week_lines,
+                    },
+                    row={
+                        "part_id": item.part_id,
+                        "planning_id": item.planning_id,
+                        "activity_id": item.activity_id,
+                        "title": item.title,
+                        "subject": item.subject,
+                        "teacher": item.teacher,
+                        "start_date": item.start_date,
+                        "end_date": item.end_date,
+                        "publish_date": item.publish_date,
+                        "status": item.status,
+                        "read": item.read,
+                    },
+                )
+                for item in planning_items
+            ],
+            exams=upcoming_exams,
+            unreported_absence=list(getattr(absence, "events", []) or []),
+            news=recent_news,
+            errors=errors,
+            note=None
+            if lessons
+            else (
+                "No lessons on this date — a holiday, a study day, or the "
+                "schedule has not been published for this week."
+            ),
+        )
+    )
 
 
 @mcp.tool()

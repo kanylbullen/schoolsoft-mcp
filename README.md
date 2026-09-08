@@ -20,6 +20,8 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_homework`    | Experimental    | Page layouts vary per school.                                 |
 | `get_attendance`  | Experimental    | Heuristic date/minute extraction.                             |
 | `get_news`        | Experimental    | Parses startpage headings + bodies.                           |
+| `get_planning`    | Stable          | REST subject-room grid + per-planning body.                   |
+| `get_day_briefing`| Stable          | Joins schedule, plannings, assignments and exams for a day.   |
 | `get_messages`    | Experimental    | Subject/sender/date are heuristic.                            |
 | `dump_page`       | Debug           | Returns raw HTML so parsers can be improved.                  |
 
@@ -172,6 +174,12 @@ All tools accept no arguments unless noted.
 
 ### Multi-child accounts
 
+> **Every data tool takes `student_id`.** On a parent account the SchoolSoft
+> session carries exactly one selected child, and a tool called without
+> `student_id` answers for whichever child happens to be selected — with a
+> 200, not an error. Passing it explicitly is the only way a response cannot
+> silently be a sibling's.
+
 - **`list_children()`** — Children attached to this parent account, with
   `student_id`, `org_id`, name, school/grade, and which one is currently
   active in SchoolSoft's session.
@@ -193,23 +201,65 @@ All tools accept no arguments unless noted.
 - **`get_lunch_menu(week?: int)`** — Lunch menu for the given ISO week
   (current week by default). One entry per weekday with the main dish
   and the vegetarian alternative (`"main | Veg: alt"`).
-- **`get_schedule(week?: int, year?: int)`** — Lessons for the given
-  ISO week (defaults to current). Each lesson carries start/end times,
-  subject, teacher, room, teaching group, `lesson_id`, hex `color`,
-  `attendance_status` (if reported), and `is_break` for breaks/lunch.
-  All-day events (sport days, planning bands) are merged into
-  `all_day_events`. Uses REST when available, falls back to the legacy
-  JSP scraper on non-2xx.
-- **`get_homework(week?: int, year?: int)`** — Assignments / läxor for
-  the given ISO week (defaults to current). Each item carries
-  `title`, `subject`, `kind` (e.g. "Diagnos", "Inlämningsuppgift"),
-  `date_range`, `due` (ISO date), `read`, `submission_status`,
-  `result_status`, and IDs. Uses the REST endpoint when available,
-  falls back to the legacy JSP scraper on non-2xx.
-- **`get_planning(week?: int, year?: int)`** — Lesson plans
-  (planeringar) for the given ISO week. Each `PlanningPart` describes
-  one piece of a larger plan with subject, date range, title and the
-  parent planning ID.
+- **`get_schedule(week?: int, year?: int, student_id?: int)`** — Lessons
+  for the given ISO week (defaults to current). Each lesson carries
+  start/end times, subject, teacher, room, teaching group, `lesson_id`,
+  hex `color`, `attendance_status` (if reported), and `is_break` for
+  breaks/lunch. All-day events (sport days, planning bands) are merged
+  into `all_day_events`. Uses REST when available, falls back to the
+  legacy JSP scraper on non-2xx.
+- **`get_homework(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000)`**
+  — Assignments / läxor / prov overlapping the given ISO week. Each item
+  carries `title`, `subject`, `kind` (e.g. "Diagnos", "Läxa"), ISO
+  `start_date`/`end_date`, `teacher`, `status`, `submission_status`,
+  `result_status`, IDs, and `body` — the assignment's full text, which
+  the week-scoped start-page endpoint does not return.
+- **`get_planning(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000)`**
+  — Lesson plans (planeringar) **in force during** the given ISO week.
+
+  Selection is by date overlap, not by week bucket: a term-long planning
+  ("Idrott och hälsa HT") runs from August to December and is dropped
+  entirely by a `?week=N` query — and it is exactly that kind of planning
+  that carries the week-by-week detail.
+
+  Each `PlanningPart` carries subject, teacher, ISO `start_date`/`end_date`,
+  and two text fields:
+
+  - `body` — the teacher's own planning text, HTML flattened to plain text.
+  - `week_lines` — the line(s) of `body` naming the requested week, e.g.
+    `"v.37 Orientering (samling vid klubbstugan)"`. A term-long planning is
+    in force every school day but only one of its lines is about any given
+    week; this is that line. Empty when the body is not organised by week.
+- **`get_planning_detail(part_id: int, week?: int, student_id?: int, max_body_chars? = 20000)`**
+  — One planning in full, with the files and links the teacher attached.
+- **`get_subject_rooms(student_id?: int, include_teachers? = True)`** —
+  The child's subject rooms (ämnesrum) with their teachers. Each room's
+  `activity_id` is the join key used across plannings, assignments and
+  lessons.
+- **`get_exam_schedule(student_id?: int)`** — Announced exams. Note that
+  `start`/`end` are the window the announcement is *shown* in, not when
+  the exam is written; the exam's own date is on the matching assignment
+  in `get_homework`.
+- **`get_lesson_detail(lesson_id: int, student_id?: int)`** — Room,
+  teachers and group for one scheduled lesson.
+
+### One call for "what does this child need today"
+
+- **`get_day_briefing(date?: str, student_id?: int, news_days? = 14, max_body_chars? = 2000)`**
+  — The day's lessons **with the planning text that applies to that week
+  attached to each lesson**, plus assignments due today and this week,
+  announced exams, unreported absence, and recent news/veckobrev.
+
+  Prefer this over calling `get_schedule` + `get_planning` + `get_homework`
+  separately. The joining is the point: a schedule row says "Idrott 08:20",
+  and only the subject's planning says the class is meeting at the
+  disc-golf course rather than at school. Read apart, that detail goes
+  missing while the summary still looks correct.
+
+  `prepare` is the short list to act on before leaving: lessons needing kit
+  or a different meeting point, exams, and work due. Every entry is derived
+  from fetched data — a preparation-heavy lesson with no published planning
+  says so rather than guessing what to bring.
 
 ### Grades
 
