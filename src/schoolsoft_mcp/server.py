@@ -35,6 +35,9 @@ from .models import (
     ContactList,
     DayBriefing,
     DayLesson,
+    DocumentBlock,
+    DocumentPartStatus,
+    DocumentSection,
     ExamSchedule,
     FritidsDay,
     FritidsTimes,
@@ -57,12 +60,16 @@ from .models import (
     ResultList,
     ScheduleWeek,
     SchoolInformation,
+    StudentDocument,
+    StudentDocumentDetail,
+    StudentDocumentList,
     SubjectAssessment,
     SubjectRoomList,
     UnreportedAbsenceList,
 )
 from .parsers import assessment as asm
 from .parsers import fritids as fr
+from .parsers import student_documents as sd
 from .parsers import subjectrooms as sr
 from .parsers.attachments import (
     build_download_path,
@@ -1939,6 +1946,123 @@ async def get_fritids_times(
             recurring_weeks=parsed["recurring_weeks"],
             opening_hours=parsed["opening_hours"],
             has_fritids=parsed["has_fritids"],
+            note=parsed["note"],
+        )
+    )
+
+
+@mcp.tool()
+async def get_student_documents(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> StudentDocumentList:
+    """Return the child's IUP documents and who has filled in each part.
+
+    Maps to Elevdokument. One entry per document ("IUP VT 2026"), each
+    with a status cell per subject plus "Övrigt" and "Allmänt omdöme":
+    which of staff, pupil and guardian have written their part, and which
+    are still awaited. ``guardian_pending`` lists the parts the family is
+    expected to write before the next development talk; empty is normal
+    and worth saying.
+
+    The text itself is one call further in: ``get_student_document`` with
+    the ``doc_id`` and the cell's ``part_type``/``subject_id``. The general
+    assessment (``part_type=4, subject_id=0``) is where the IUP text lives.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        html = await app.client.fetch_html(sd.DOCUMENTS_PATH)
+    parsed = sd.parse_document_grid(html)
+    documents = [
+        StudentDocument(
+            doc_id=d["doc_id"],
+            title=d["title"],
+            parts=[DocumentPartStatus(**part) for part in d["parts"]],
+        )
+        for d in parsed
+    ]
+    pending = [
+        f"{d.title} / {part.column}"
+        for d in documents
+        for part in d.parts
+        if "guardian" in part.awaiting
+    ]
+    note = None
+    if not documents:
+        note = (
+            "No documents found. Either none have been created for this child "
+            f"or the layout differs — call dump_page('{sd.DOCUMENTS_PATH}')."
+        )
+    elif pending:
+        note = f"{len(pending)} part(s) still waiting for the guardian's answer."
+    return _stamp(
+        StudentDocumentList(
+            school=app.settings.school,
+            student_id=student_id,
+            documents=documents,
+            guardian_pending=pending,
+            note=note,
+        )
+    )
+
+
+@mcp.tool()
+async def get_student_document(
+    ctx: Context[Any, AppContext, Any],
+    doc_id: int,
+    student_id: int | None = None,
+    part_type: int = 4,
+    subject_id: int = 0,
+) -> StudentDocumentDetail:
+    """Return one part of an IUP document in full.
+
+    ``doc_id`` is from ``get_student_documents``; ``part_type`` and
+    ``subject_id`` are the cell's. The defaults (4, 0) select the general
+    assessment — the goals agreed at the development talk, the method and
+    who is responsible, how the child says they are doing, and who was in
+    the room — grouped in ``blocks`` by who wrote them, each dated and
+    signed.
+
+    This is the child's own words about school as well as the school's.
+    Quote it to the family; do not paraphrase it into something the child
+    did not say.
+
+    Read only: the page is named "edit" and renders read-only for a
+    guardian. Nothing here posts.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        html = await app.client.fetch_html(
+            sd.DOCUMENTS_PATH,
+            params={
+                "action": "edit",
+                "requestid": str(doc_id),
+                "type": str(part_type),
+                "subject": str(subject_id),
+            },
+        )
+    parsed = sd.parse_document_part(html)
+    return _stamp(
+        StudentDocumentDetail(
+            school=app.settings.school,
+            doc_id=doc_id,
+            part_type=part_type,
+            subject_id=subject_id,
+            title=parsed["title"],
+            part_label=parsed["part_label"],
+            subject_label=parsed["subject_label"],
+            blocks=[
+                DocumentBlock(
+                    role=b["role"],
+                    written=b["written"],
+                    updated=b["updated"],
+                    updated_by=b["updated_by"],
+                    sections=[DocumentSection(**sec) for sec in b["sections"]],
+                )
+                for b in parsed["blocks"]
+            ],
             note=parsed["note"],
         )
     )
