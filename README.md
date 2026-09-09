@@ -85,6 +85,19 @@ pass credentials to MCP clients is the client's own `env` block (see
 disk. Any external secrets manager works too, as long as it can inject
 the variables into the spawned MCP server process.
 
+### Caching
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SCHOOLSOFT_CACHE_GRID_TTL` | `600` | Seconds to serve the plannings grid from memory. |
+| `SCHOOLSOFT_CACHE_BODY_TTL` | `21600` | Seconds to serve a planning body from memory, unless its grid row changes first. |
+
+Set either to `0` to disable that layer. The cache lives in the server
+process; nothing is written to disk. SchoolSoft offers no ETag or
+`Last-Modified` on these endpoints (a conditional GET is answered 406), so
+the grid row is the only cheap freshness signal and the TTL bounds what it
+cannot see.
+
 ## Using with Claude Desktop
 
 Add an entry to `claude_desktop_config.json` (location depends on your OS —
@@ -228,7 +241,7 @@ All tools accept no arguments unless noted.
   `start_date`/`end_date`, `teacher`, `status`, `submission_status`,
   `result_status`, IDs, and `body` — the assignment's full text, which
   the week-scoped start-page endpoint does not return.
-- **`get_planning(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000)`**
+- **`get_planning(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000, refresh? = False)`**
   — Lesson plans (planeringar) **in force during** the given ISO week.
 
   Selection is by date overlap, not by week bucket: a term-long planning
@@ -254,7 +267,17 @@ All tools accept no arguments unless noted.
   A planning written as a `Vecka | Innehåll` table works the same way: the
   header is carried onto each row, so a row reading `34-36` answers a
   question about week 35.
-- **`get_planning_detail(part_id: int, week?: int, student_id?: int, max_body_chars? = 20000)`**
+
+  **Cached.** A subject planning is the same for weeks, so the grid and the
+  bodies are served from an in-process cache: the grid for ten minutes, a
+  body for six hours or until its grid row changes (re-published, re-dated,
+  or marked unread again, which is what SchoolSoft does when a teacher
+  edits). A second listing in the same process makes no planning requests
+  at all, and `get_planning_detail` no longer downloads the whole grid to
+  read one row. Pass `refresh=True` when a teacher is known to have just
+  edited something. A one-shot process starts cold and fetches fresh. See
+  *Caching* under Configuration for the knobs.
+- **`get_planning_detail(part_id: int, week?: int, student_id?: int, max_body_chars? = 20000, refresh? = False)`**
   — One planning in full, with the files and links the teacher attached.
 - **`get_subject_rooms(student_id?: int, include_teachers? = True)`** —
   The child's subject rooms (ämnesrum) with their teachers. Each room's
@@ -269,7 +292,7 @@ All tools accept no arguments unless noted.
 
 ### One call for "what does this child need today"
 
-- **`get_day_briefing(date?: str, student_id?: int, news_days? = 14, max_body_chars? = 2000)`**
+- **`get_day_briefing(date?: str, student_id?: int, news_days? = 14, max_body_chars? = 2000, refresh? = False)`**
   — The day's lessons **with the planning text that applies to that week
   attached to each lesson**, plus assignments due today and this week,
   announced exams, unreported absence, and recent news/veckobrev.

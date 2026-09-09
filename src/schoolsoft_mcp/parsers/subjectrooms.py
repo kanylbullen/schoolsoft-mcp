@@ -467,6 +467,29 @@ def parse_assignment_row(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def row_fingerprint(row: Any) -> tuple[str, ...]:
+    """What about a grid row would move if its planning changed.
+
+    SchoolSoft offers no ETag or modification time on a planning body, so
+    the grid row is the only cheap freshness signal: a re-published part
+    moves ``publishDate``, an edited one is marked unread again, a re-dated
+    one moves its bounds. Any of those should invalidate a cached body.
+    None of them is a guarantee, which is why the cache also has a TTL.
+
+    Accepts the dict ``parse_planning_row`` returns or a ``PlanningPart``.
+    """
+    if isinstance(row, dict):
+        def get(key: str) -> Any:
+            return row.get(key)
+    else:
+        def get(key: str) -> Any:
+            return getattr(row, key, None)
+    return tuple(
+        str(get(key) if get(key) is not None else "")
+        for key in ("publish_date", "title", "start_date", "end_date", "status", "read")
+    )
+
+
 def parse_detail_view(
     payload: Any, *, week: int | None = None, max_body_chars: int | None = None
 ) -> dict[str, Any]:
