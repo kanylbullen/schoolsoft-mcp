@@ -282,6 +282,55 @@ All tools accept no arguments unless noted.
   day that looks empty because the schedule fetch failed says so instead of
   reporting a holiday.
 
+### Assessment, results and outstanding work
+
+- **`get_assessments(student_id?: int)`** — Sammantagen bedömning, one row
+  per subject, flagged subjects first.
+
+  This is what a Swedish school publishes for the years that carry no formal
+  grades. On those years `get_grades` (Betyg) is close to empty while this
+  holds everything the teachers have said, so prefer it below the grading
+  years. Each subject carries the school's own wording ("Godtagbara
+  kunskaper", "Mer än godtagbara kunskaper"), when it was updated and
+  published, and whether a guardian has read it.
+
+  `subject_warning` is the school's flag that a subject risks not reaching
+  the goals. Flagged subjects sort first and repeat in `warnings`. An empty
+  `warnings` is an answer worth stating, not an absence worth omitting.
+
+  Subjects the school has not assessed yet are returned with
+  `published: false` and are not counted as unread — a guardian has not
+  failed to read something that was never written.
+- **`get_assessment_detail(assessment_id: int, student_id?: int)`** — One
+  subject in full: the knowledge-development wording, any support measures,
+  the teacher's formative comments, the graded work behind it, the warning
+  with its motivation, and the earlier terms the subject was assessed in.
+
+  `assessed_work[].grade` is where an actual grade like `"B"` lives.
+
+  `published_sections` says which sections the school publishes to
+  guardians. A section missing from it is not withheld by this server; the
+  school does not publish it. An active warning that is not yet published is
+  reported as such rather than as something the family has been told.
+- **`get_results(student_id?: int)`** — Published results, newest first.
+
+  Says *that* a result was published, for which assignment, by whom and
+  when. It does **not** carry the grade: SchoolSoft's results list has no
+  such field, and the model has no empty `grade` that would read as "no
+  grade given". For the grade, call `get_assessment_detail` and read
+  `assessed_work`.
+- **`get_open_work(student_id?: int, include_expired? = False, entity_type?: str)`**
+  — Everything currently open, in due order, whatever week it falls in.
+
+  `get_homework` answers "what falls in week N", which is right for a day
+  briefing and wrong for "what does this child still owe". A task due in
+  three weeks is invisible to the week query and present here.
+
+  The list mixes assignments and plannings. Pass `entity_type="ASSIGNMENT"`
+  for work with a deadline; term-long plannings otherwise appear with an end
+  date in December. Expired work is hidden unless `include_expired` is set,
+  and the `note` says how much was hidden.
+
 ### Grades
 
 - **`get_grades()`** — Subject grades for the active child

@@ -6,6 +6,7 @@ import asyncio
 import base64
 import datetime as dt
 import logging
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -23,6 +24,10 @@ from .client import (
 from .config import ConfigError, Settings
 from .models import (
     AsOf,
+    AssessedWork,
+    AssessmentDetail,
+    AssessmentList,
+    AssessmentTerm,
     AttachmentBytes,
     AttachmentText,
     AttendanceReport,
@@ -40,14 +45,20 @@ from .models import (
     MessageList,
     NewsFeed,
     NewsItem,
+    OpenWorkItem,
+    OpenWorkList,
     PlanningDetail,
     PlanningList,
     PlanningPart,
+    ResultEntry,
+    ResultList,
     ScheduleWeek,
     SchoolInformation,
+    SubjectAssessment,
     SubjectRoomList,
     UnreportedAbsenceList,
 )
+from .parsers import assessment as asm
 from .parsers import subjectrooms as sr
 from .parsers.attachments import (
     build_download_path,
@@ -1614,6 +1625,259 @@ async def get_day_briefing(
             news=recent_news,
             errors=errors,
             note=_briefing_note(lessons, schedule_failed=schedule is None),
+        )
+    )
+
+
+@mcp.tool()
+async def get_assessments(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> AssessmentList:
+    """Return Sammantagen bedömning — one row per subject, warnings first.
+
+    This is what a Swedish school publishes for the years that carry no
+    formal grades. On those years ``get_grades`` (Betyg) is close to empty
+    while this holds everything the teachers have said, so prefer this one
+    for anything below the grading years.
+
+    Each subject carries the school's wording ("Godtagbara kunskaper", "Mer
+    än godtagbara kunskaper"), when it was last updated and published, and
+    whether a guardian has read it.
+
+    ``subject_warning`` is the school's flag that a subject risks not
+    reaching the goals. Flagged subjects sort first and are repeated in
+    ``warnings``. An empty ``warnings`` is worth saying out loud rather than
+    omitting — "no subject is flagged" is an answer.
+
+    Call ``get_assessment_detail`` for the teacher's own text, the graded
+    work behind the assessment, and a warning's motivation.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        usertype = app.settings.usertype
+        rows = await app.client.fetch_json(
+            asm.path_for(asm.ASSESSMENT_ROWS, usertype)
+        )
+        options = await _fetch_json_or_none(
+            app,
+            asm.path_for(asm.ASSESSMENT_OPTIONS, usertype),
+            label="Assessment options",
+        )
+
+    subjects = [
+        SubjectAssessment(**row) for row in asm.parse_assessment_rows(rows, options)
+    ]
+    warnings = [s.subject for s in subjects if s.subject_warning]
+    # A subject the school has not assessed yet is not something a guardian
+    # has failed to read. Counting it as unread manufactures 21 items of
+    # homework for a parent who has nothing to do.
+    published = [s for s in subjects if s.published]
+    unread = sum(1 for s in published if not s.read)
+    note = None
+    if not subjects:
+        note = (
+            "No holistic assessment published for this child. Some school "
+            "years use Betyg instead — try get_grades()."
+        )
+    elif not published:
+        note = (
+            f"None of the {len(subjects)} subjects has a published assessment "
+            "yet. This school year probably uses Betyg — try get_grades()."
+        )
+    elif warnings:
+        note = (
+            f"{len(warnings)} subject(s) flagged as at risk of not reaching "
+            f"the goals: {', '.join(warnings)}. Call get_assessment_detail "
+            "for the motivation before repeating this to a family."
+        )
+    return _stamp(
+        AssessmentList(
+            school=app.settings.school,
+            student_id=student_id,
+            subjects=subjects,
+            warnings=warnings,
+            unread=unread,
+            note=note,
+        )
+    )
+
+
+@mcp.tool()
+async def get_assessment_detail(
+    ctx: Context[Any, AppContext, Any],
+    assessment_id: int,
+    student_id: int | None = None,
+) -> AssessmentDetail:
+    """Return one subject's assessment in full.
+
+    ``assessment_id`` is the ``assessment_id`` from ``get_assessments``.
+    Returns the knowledge-development wording, any support measures the
+    school has put in place, the teacher's formative comments, the graded
+    work behind the assessment (``assessed_work`` — this is where an actual
+    grade like "B" lives, not on ``get_results``), the subject warning with
+    its motivation, and the earlier terms the same subject was assessed in.
+
+    ``published_sections`` says which sections this school publishes to
+    guardians. A section missing from it is not withheld by this tool; the
+    school does not publish it.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        usertype = app.settings.usertype
+
+        def path(template: str) -> str:
+            return asm.path_for(template, usertype, assessment_id=assessment_id)
+
+        header = await app.client.fetch_json(path(asm.ASSESSMENT_HEADER))
+        knowledge = await _fetch_json_or_none(
+            app, path(asm.ASSESSMENT_KNOWLEDGE), label="Knowledge development"
+        )
+        warning = await _fetch_json_or_none(
+            app, path(asm.ASSESSMENT_WARNING), label="Subject warning"
+        )
+        work = await _fetch_json_or_none(
+            app, path(asm.ASSESSMENT_WORK), label="Assessed work"
+        )
+        comments = await _fetch_json_or_none(
+            app, path(asm.ASSESSMENT_COMMENTS), label="Formative comments"
+        )
+        sections = await _fetch_json_or_none(
+            app, path(asm.ASSESSMENT_SECTIONS), label="Published sections"
+        )
+        history = await _fetch_json_or_none(
+            app, path(asm.ASSESSMENT_HISTORY), label="Assessment history"
+        )
+
+    header = header if isinstance(header, dict) else {}
+    know = asm.parse_knowledge_development(knowledge)
+    warn = asm.parse_subject_warning(warning)
+    return _stamp(
+        AssessmentDetail(
+            school=app.settings.school,
+            assessment_id=assessment_id,
+            student_name=str(header.get("studentName") or ""),
+            subject=str(header.get("activityName") or ""),
+            group=str(header.get("groupName") or ""),
+            publish_status=str(header.get("publishStatus") or ""),
+            assessment=know["assessment"],
+            support_measures=know["support_measures"],
+            updated_by=know["updated_by"],
+            subject_warning=bool(warn["active"]),
+            warning_published=bool(warn["published"]),
+            warning_comment=str(warn["comment"]),
+            comments=asm.parse_comments(comments),
+            assessed_work=[AssessedWork(**w) for w in asm.parse_assessed_work(work)],
+            published_sections=[
+                str(x) for x in (sections if isinstance(sections, list) else [])
+            ],
+            terms=[AssessmentTerm(**t) for t in asm.parse_history(history)],
+            note=(
+                "The subject is flagged as at risk, but the warning is not "
+                "published to guardians yet — the school is still writing it. "
+                "Do not report it as something the family has been told."
+                if warn["active"] and not warn["published"]
+                else None
+            ),
+        )
+    )
+
+
+@mcp.tool()
+async def get_results(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+) -> ResultList:
+    """Return published results (Ämnen → Resultat), newest first.
+
+    Says *that* a result was published, for which assignment, by which
+    teacher and when. It does **not** carry the grade — SchoolSoft's results
+    list has no such field. The grade sits on the subject's assessment:
+    ``get_assessment_detail(...).assessed_work[].grade``.
+
+    Use this to spot what is new since a family last looked; use
+    ``get_assessment_detail`` to find out what the result actually was.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        rows = await app.client.fetch_json(
+            asm.path_for(asm.RESULT_ROWS, app.settings.usertype)
+        )
+    results = [ResultEntry(**r) for r in asm.parse_result_rows(rows)]
+    unread = sum(1 for r in results if not r.read)
+    return _stamp(
+        ResultList(
+            school=app.settings.school,
+            student_id=student_id,
+            results=results,
+            unread=unread,
+            note=(
+                "Results carry no grade on this endpoint. For the grade, call "
+                "get_assessment_detail for the subject and read assessed_work."
+                if results
+                else "No published results."
+            ),
+        )
+    )
+
+
+@mcp.tool()
+async def get_open_work(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+    include_expired: bool = False,
+    entity_type: str | None = None,
+) -> OpenWorkList:
+    """Return everything currently open, in due order, regardless of week.
+
+    ``get_homework`` answers "what falls in week N", which is the right
+    question for a day briefing and the wrong one for "what does this child
+    still owe". A task due in three weeks is invisible to the week query and
+    present here — this is the UI's *Aktuella* tab.
+
+    The list mixes assignments and plannings; ``entity_type`` on each item
+    says which, and the parameter of the same name filters
+    (``"ASSIGNMENT"`` for work with a deadline). Term-long plannings appear
+    with an end date in December, which is correct and rarely what you want
+    when asking what is due.
+
+    Expired work is left out by default. Set ``include_expired`` to see it —
+    an expired item is past its date, which for an assignment may mean
+    overdue rather than done.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        rows = await app.client.fetch_json(
+            asm.path_for(asm.OPEN_WORK_ROWS, app.settings.usertype)
+        )
+    parsed = asm.parse_open_work(rows)
+    hidden = 0
+    if not include_expired:
+        keep = [r for r in parsed if r["status"] == "ONGOING"]
+        hidden = len(parsed) - len(keep)
+        parsed = keep
+    if entity_type:
+        parsed = [r for r in parsed if r["entity_type"] == entity_type.upper()]
+    items = [OpenWorkItem(**r) for r in parsed]
+
+    kinds = Counter(i.entity_type for i in items)
+    parts = [f"{count} {name.lower()}(s)" for name, count in sorted(kinds.items())]
+    note = ", ".join(parts) if parts else "Nothing open."
+    if hidden:
+        note += (
+            f". {hidden} expired or finished item(s) hidden; pass "
+            "include_expired=True to see them."
+        )
+    return _stamp(
+        OpenWorkList(
+            school=app.settings.school,
+            student_id=student_id,
+            items=items,
+            note=note,
         )
     )
 
