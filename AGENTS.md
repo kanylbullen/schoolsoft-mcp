@@ -80,6 +80,7 @@ tests/
 | `get_assessments`     | Stable       | High       | Warnings sort first; unread is real |
 | `get_assessment_detail`| Stable      | High       | `assessed_work[].grade` is the grade |
 | `get_results`         | Stable       | High       | No grade on this endpoint, by design |
+| `get_result_detail`   | Stable       | High       | The result itself; works on grading years |
 | `get_open_work`       | Stable       | Medium     | Mixes assignments and plannings      |
 | `get_fritids_times`   | Stable       | High       | Day cells by link, never by CSS class |
 | `get_student_documents`| Stable      | High       | Status from image filenames           |
