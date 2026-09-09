@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Block commits that carry live-account data. Install with scripts/install-hooks.sh.
+set -euo pipefail
+files=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$files" ] && exit 0
+# shellcheck disable=SC2086
+python3 "$(git rev-parse --show-toplevel)/scripts/check_pii.py" $files

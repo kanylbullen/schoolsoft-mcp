@@ -20,11 +20,11 @@ HEADER_URL = f"{BASE}/yourschool/rest-api/parent/header/parent"
 
 HEADER_PAYLOAD = {
     "children": [
-        {"id": 4711, "firstName": "Bea", "schools": [{"orgId": 175, "className": "7B"}]},
-        {"id": 4712, "firstName": "Cai", "schools": [{"orgId": 175, "className": "2A"}]},
+        {"id": 900017, "firstName": "Bea", "schools": [{"orgId": 900003, "className": "7B"}]},
+        {"id": 4712, "firstName": "Cai", "schools": [{"orgId": 900003, "className": "2A"}]},
     ],
-    "currentChildId": 4711,
-    "currentOrgId": 175,
+    "currentChildId": 900017,
+    "currentOrgId": 900003,
 }
 
 
@@ -70,7 +70,7 @@ async def test_download_succeeds_on_the_first_try(app: AppContext) -> None:
     )
 
     content, headers, note = await _fetch_attachment(
-        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
     )
 
     assert content == b"%PDF-1.4 stub"
@@ -94,7 +94,7 @@ async def test_404_retries_after_opening_the_news_item(app: AppContext) -> None:
     ]
 
     content, _headers, note = await _fetch_attachment(
-        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
     )
 
     assert content == b"%PDF-1.4 stub"
@@ -111,7 +111,7 @@ async def test_persistent_404_returns_an_actionable_note(app: AppContext) -> Non
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(404, text="Not Found"))
 
     content, headers, note = await _fetch_attachment(
-        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
     )
 
     assert content == b""
@@ -130,22 +130,22 @@ async def test_non_404_errors_still_raise(app: AppContext) -> None:
 
     with pytest.raises(httpx.HTTPStatusError):
         await _fetch_attachment(
-            app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+            app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
         )
     await app.client.close()
 
 
 @respx.mock
 async def test_select_child_looks_up_the_real_org_id(app: AppContext) -> None:
-    """Never guess orgId=1: a wrong one is accepted while the child doesn't change."""
+    """Never guess orgId=900001: a wrong one is accepted while the child doesn't change."""
     _mock_login()
     respx.get(HEADER_URL).mock(return_value=httpx.Response(200, json=HEADER_PAYLOAD))
     put = respx.put(HEADER_URL).mock(return_value=httpx.Response(200, json={}))
 
     await _select_child(app, 4712)
 
-    assert put.calls[0].request.url.params["orgId"] == "175"
-    assert app.client.active_child == (4712, 175)
+    assert put.calls[0].request.url.params["orgId"] == "900003"
+    assert app.client.active_child == (4712, 900003)
     await app.client.close()
 
 
@@ -184,7 +184,7 @@ async def test_refused_after_reauth_gets_the_note_too(app: AppContext) -> None:
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(403))
 
     content, _headers, note = await _fetch_attachment(
-        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
     )
 
     assert content == b""
@@ -205,22 +205,22 @@ async def test_bad_credentials_are_not_dressed_up_as_a_child_problem(
 
     with pytest.raises(SchoolSoftAuthError):
         await _fetch_attachment(
-            app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+            app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
         )
     await app.client.close()
 
 
 @respx.mock
 async def test_missing_org_id_fails_loudly(app: AppContext) -> None:
-    """Guessing orgId=1 would switch nothing and answer for the previous child."""
+    """Guessing orgId=900001 would switch nothing and answer for the previous child."""
     _mock_login()
     respx.get(HEADER_URL).mock(
         return_value=httpx.Response(
             200,
             json={
-                "children": [{"id": 4711, "name": "Bea"}, {"id": 4712, "name": "Cai"}],
-                "currentChildId": 4711,
-                "currentOrgId": 175,
+                "children": [{"id": 900017, "name": "Bea"}, {"id": 4712, "name": "Cai"}],
+                "currentChildId": 900017,
+                "currentOrgId": 900003,
             },
         )
     )
@@ -254,7 +254,7 @@ async def test_retries_until_the_temp_file_lands(app: AppContext) -> None:
     ]
 
     content, _headers, note = await _fetch_attachment(
-        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
     )
 
     assert content == b"%PDF-1.4 stub"
@@ -279,7 +279,7 @@ async def test_a_failed_priming_request_does_not_abort_the_retries(
     ]
 
     content, _headers, note = await _fetch_attachment(
-        app, news_id=11854, fileid=11955, type_id=1, object_kind="news"
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
     )
 
     assert content == b"%PDF-1.4 stub"

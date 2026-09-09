@@ -9,12 +9,12 @@ HEADER_PAYLOAD = {
     "lastName": "Andersson",
     "children": [
         {
-            "id": 4711,
+            "id": 900017,
             "firstName": "Bea",
             "lastName": "Andersson",
             "schools": [
                 {
-                    "orgId": 175,
+                    "orgId": 900003,
                     "className": "7B",
                     "schoolName": "Yourschool",
                     "studentActive": True,
@@ -28,7 +28,7 @@ HEADER_PAYLOAD = {
             "lastName": "Andersson",
             "schools": [
                 {
-                    "orgId": 175,
+                    "orgId": 900003,
                     "className": "2A",
                     "schoolName": "Yourschool",
                     "studentActive": True,
@@ -37,17 +37,17 @@ HEADER_PAYLOAD = {
             ],
         },
     ],
-    "currentChildId": 4711,
-    "currentOrgId": 175,
+    "currentChildId": 900017,
+    "currentOrgId": 900003,
 }
 
 
 def test_parses_children_with_org_ids() -> None:
     result = parse_parent_header(HEADER_PAYLOAD, school="yourschool")
-    assert [c.student_id for c in result.children] == [4711, 4712]
-    assert [c.org_id for c in result.children] == [175, 175]
-    assert result.active_student_id == 4711
-    assert result.active_org_id == 175
+    assert [c.student_id for c in result.children] == [900017, 4712]
+    assert [c.org_id for c in result.children] == [900003, 900003]
+    assert result.active_student_id == 900017
+    assert result.active_org_id == 900003
 
 
 def test_marks_only_the_current_child_active() -> None:
@@ -73,14 +73,14 @@ def test_prefers_the_enrolment_the_parent_can_see() -> None:
                 "lastName": "Andersson",
                 "schools": [
                     {
-                        "orgId": 42,
+                        "orgId": 900002,
                         "className": "5C",
                         "schoolName": "Old School",
                         "studentActive": False,
                         "parentAllowedAccess": False,
                     },
                     {
-                        "orgId": 175,
+                        "orgId": 900003,
                         "className": "6A",
                         "schoolName": "Yourschool",
                         "studentActive": True,
@@ -90,22 +90,22 @@ def test_prefers_the_enrolment_the_parent_can_see() -> None:
             }
         ],
         "currentChildId": 4713,
-        "currentOrgId": 175,
+        "currentOrgId": 900003,
     }
     (child,) = parse_parent_header(payload, school="yourschool").children
-    assert child.org_id == 175
+    assert child.org_id == 900003
     assert child.grade == "6A"
 
 
 def test_falls_back_to_current_org_for_the_active_child() -> None:
     """Older installs omit schools[]; currentOrgId still identifies the active one."""
     payload = {
-        "children": [{"id": 4711, "name": "Bea"}, {"id": 4712, "name": "Cai"}],
-        "currentChildId": 4711,
-        "currentOrgId": 175,
+        "children": [{"id": 900017, "name": "Bea"}, {"id": 4712, "name": "Cai"}],
+        "currentChildId": 900017,
+        "currentOrgId": 900003,
     }
     bea, cai = parse_parent_header(payload, school="yourschool").children
-    assert bea.org_id == 175
+    assert bea.org_id == 900003
     assert cai.org_id is None
 
 

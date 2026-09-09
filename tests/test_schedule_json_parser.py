@@ -86,7 +86,7 @@ def test_attendance_status_extracted(lessons_json: list[dict]) -> None:  # type:
 def test_lesson_id_and_color(lessons_json: list[dict]) -> None:  # type: ignore[type-arg]
     s = parse_schedule_json(lessons_json, school="X")
     slojd = next(lesson for lesson in s.lessons if lesson.subject == "Slöjd")
-    assert slojd.lesson_id == 5001
+    assert slojd.lesson_id == 900018
     assert slojd.color == "#b820e7"
 
 

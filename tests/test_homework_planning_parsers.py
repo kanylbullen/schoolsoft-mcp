@@ -73,8 +73,8 @@ def test_homework_parses_all_items(assignments_json: list[dict]) -> None:  # typ
 def test_homework_extracts_structured_fields(assignments_json: list[dict]) -> None:  # type: ignore[type-arg]
     h = parse_homework_json(assignments_json, school="X")
     diagnos = next(i for i in h.items if i.title == "Diagnos kap.8")
-    assert diagnos.assignment_id == 1001
-    assert diagnos.activity_id == 2001
+    assert diagnos.assignment_id == 900007
+    assert diagnos.activity_id == 900008
     assert diagnos.kind == "Diagnos"
     assert diagnos.subject == "Moderna språk inom ramen för språkval"
     assert diagnos.due == "2026-05-20"
@@ -119,9 +119,9 @@ def test_planning_parses_all_items(planning_json: list[dict]) -> None:  # type: 
 def test_planning_extracts_structured_fields(planning_json: list[dict]) -> None:  # type: ignore[type-arg]
     p = parse_planning_json(planning_json, school="X")
     matte = next(i for i in p.items if "Matte" in i.title)
-    assert matte.part_id == 3002
-    assert matte.planning_id == 4002
-    assert matte.activity_id == 2003
+    assert matte.part_id == 900012
+    assert matte.planning_id == 900015
+    assert matte.activity_id == 900010
     assert matte.kind == "Planering"
     assert matte.subject == "Matematik"
     assert matte.date_range == "tors 08 jan. - tors 18 juni"

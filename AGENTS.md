@@ -21,6 +21,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 pytest          # 262 tests
+python scripts/check_pii.py  # no live-account data
 ruff check .    # lint
 mypy src        # strict type-check
 ```
@@ -144,6 +145,36 @@ sanitized `dump_page` output.
 - **Never** commit credentials, cookies, tokens, real school slugs that
   identify a person, or HTML dumps containing names/personal numbers.
   `.env` is in `.gitignore`; don't add new patterns that would leak.
+> [!danger] Fixtures are written by hand. They are never pasted.
+> This repository is public and the system on the other end holds children's
+> school records. The mistake that has actually happened here is copying a
+> real API response into a test because it was already on screen — which
+> brought a teacher's assignment titles and SchoolSoft's own record ids into
+> a public repo along with the payload shape that was the point.
+>
+> Copy the *shape*. Type the *values*. Concretely:
+>
+> - Record ids in `tests/` must be in **900000-999999**. Real ids are three
+>   or four digits, so anything in that band is unmistakably invented, and a
+>   pasted payload fails the check on its own ids before anyone reads it.
+> - Names of people, schools and places must be made up. "Alex Andersson",
+>   not the teacher who wrote the planning you are looking at.
+> - Titles of assignments and plannings are written by a real teacher for a
+>   real child. Invent them too, even when they look generic.
+>
+> `scripts/check_pii.py` enforces what can be enforced: those id ranges,
+> personal numbers, emails, phone numbers, UUIDs and school-specific URLs.
+> It runs in CI and as a pre-commit hook (`scripts/install-hooks.sh`).
+>
+> It also checks a denylist of names and places, which **cannot live here** —
+> a list of the operator's children's names is exactly the thing not to
+> publish. Keep it at `~/.config/schoolsoft-mcp/pii-denylist.txt`, one term
+> per line, or point `PII_DENYLIST_FILE` at it. Without the file the other
+> layers still run and the script says the name layer is off rather than
+> passing silently. CI runs without it, so the name layer is a local
+> control — which is the right place for it, since that is where the paste
+> happens.
+
 - Example values in docs, comments, and tests must be generic
   (`yourschool`, `alice`, `parent@example.com`).
 - Fixtures must be hand-written or thoroughly sanitized. The directory
