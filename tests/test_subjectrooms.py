@@ -714,3 +714,41 @@ class TestSharedFieldAccessors:
         from schoolsoft_mcp.parsers._fields import iso_date
 
         assert iso_date("12026-09-14") is None
+
+
+class TestMentionsWeeksReachesTheModel:
+    """The flag is useless if the wiring drops it on the way out.
+
+    Found on a live page: ``parse_detail_view`` computed it, ``day_lessons``
+    read it, and the ``PlanningPart`` built in ``get_planning`` never carried
+    it — so every consumer of the listing saw False and printed some other
+    week's body.
+    """
+
+    VIEW_KEYS = ("body", "week_lines", "mentions_weeks", "date_range")
+
+    def test_parse_detail_view_supplies_every_key_the_model_needs(self) -> None:
+        out = sr.parse_detail_view(
+            {"description": "<p>V. 35: folkrörelser</p>", "subTitle": "x, Planering, SO"},
+            week=37,
+        )
+        for key in self.VIEW_KEYS:
+            assert key in out, key
+        assert out["mentions_weeks"] is True
+        assert out["week_lines"] == []
+
+    def test_the_flag_survives_a_round_trip_through_planning_part(self) -> None:
+        view = sr.parse_detail_view(
+            {"description": "<p>V. 35: folkrörelser</p>"}, week=37
+        )
+        part = PlanningPart(
+            title="Sveriges demokratisering",
+            body=view["body"],
+            week_lines=view["week_lines"],
+            mentions_weeks=bool(view["mentions_weeks"]),
+            activity_id=460,
+            subject="Historia",
+        )
+        assert part.mentions_weeks is True
+        out = sr.day_lessons([_FakeLesson(subject="Historia")], [part], "monday")
+        assert out[0].plannings == []
