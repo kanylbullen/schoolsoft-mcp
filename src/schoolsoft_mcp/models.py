@@ -49,7 +49,10 @@ class Child(BaseModel):
     student_id: int
     name: str = ""
     school: str = Field(default="", description="School/class label shown in the UI.")
-    grade: str = Field(default="", description='e.g. "6" for "Läraskolan 6".')
+    grade: str = Field(
+        default="",
+        description='Year as the school labels it, e.g. "6" for "<school> 6".',
+    )
     org_id: int | None = Field(
         default=None,
         description=(

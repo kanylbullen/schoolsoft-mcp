@@ -250,7 +250,7 @@ def week_references(line: str) -> set[int]:
 def lines_for_week(body: str, week: int) -> list[str]:
     """Lines of ``body`` that explicitly name ``week``.
 
-    A term-long planning ("Idrott och hälsa HT", 19 aug - 31 dec) is
+    A term-long planning ("Idrott och hälsa terminen", 19 aug - 31 dec) is
     *in force* every single school day, so date-range filtering alone
     surfaces it every day with 18 weeks of content attached. The teacher
     already solved this by writing one line per week; this pulls out the
@@ -348,7 +348,7 @@ def overlaps(
     A missing bound is treated as open-ended rather than as a mismatch:
     SchoolSoft leaves ``endDate`` empty on plannings with no stated end,
     and dropping those would hide exactly the long-running ones (term
-    plans, "Idrott och hälsa HT") that carry the week-by-week detail.
+    plans, "Idrott och hälsa terminen") that carry the week-by-week detail.
     """
     if start is not None and start > last:
         return False

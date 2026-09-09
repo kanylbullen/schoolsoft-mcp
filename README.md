@@ -218,7 +218,7 @@ All tools accept no arguments unless noted.
   — Lesson plans (planeringar) **in force during** the given ISO week.
 
   Selection is by date overlap, not by week bucket: a term-long planning
-  ("Idrott och hälsa HT") runs from August to December and is dropped
+  ("Idrott och hälsa terminen") runs from August to December and is dropped
   entirely by a `?week=N` query — and it is exactly that kind of planning
   that carries the week-by-week detail.
 
