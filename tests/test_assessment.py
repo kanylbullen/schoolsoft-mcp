@@ -196,7 +196,7 @@ class TestResultDetail:
     PAYLOAD: ClassVar[dict[str, object]] = {
         "assessmentPartialMoments": [],
         "review": "C",
-        "teacherComment": "Bra jobbat med säkerheten på labben.",
+        "teacherComment": "<p>Bra jobbat med säkerheten på labben.</p>\n<p>20/24 poäng.</p>",
         "studentComment": "",
         "assessedCriteriaTabs": [
             {
@@ -219,6 +219,8 @@ class TestResultDetail:
         out = asm.parse_result_assessment(self.PAYLOAD)
         assert out["review"] == "C"
         assert out["teacher_comment"].startswith("Bra jobbat")
+        assert "<p>" not in out["teacher_comment"]
+        assert "20/24 poäng." in out["teacher_comment"]
         assert out["partial_moment_count"] == 0
 
     def test_only_the_reached_level_text_is_kept(self) -> None:

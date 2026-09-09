@@ -59,7 +59,7 @@ import logging
 from typing import Any
 
 from ._fields import int_field, str_field
-from .subjectrooms import usertype_segment
+from .subjectrooms import html_to_text, usertype_segment
 
 logger = logging.getLogger(__name__)
 
@@ -299,10 +299,12 @@ def parse_result_assessment(payload: Any) -> dict[str, Any]:
                 }
             )
     moments = payload.get("assessmentPartialMoments")
+    # Comments are stored as HTML ("<p>20 av 24 poäng.</p>"); a guardian
+    # reads text, and so should the model.
     return {
         "review": _s(payload, "review"),
-        "teacher_comment": _s(payload, "teacherComment"),
-        "student_comment": _s(payload, "studentComment"),
+        "teacher_comment": html_to_text(_s(payload, "teacherComment")),
+        "student_comment": html_to_text(_s(payload, "studentComment")),
         "criteria": criteria,
         "partial_moment_count": len(moments) if isinstance(moments, list) else 0,
     }
