@@ -31,6 +31,8 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_open_work`         | Stable       | What is outstanding, independent of week.                        |
 | `get_unreported_absence`| Stable       | Splits absences awaiting a guardian from ones already confirmed. |
 | `get_fritids_times`     | Stable       | After-school care: drop-off and pick-up per day, school hours beside them. |
+| `get_student_documents` | Stable       | IUP documents and who has filled in each part.                    |
+| `get_student_document`  | Stable       | One IUP part in full: goals, method, wellbeing, attendees.        |
 | `get_grades`            | Stable       | Betyg. Near-empty for years that use assessments instead.        |
 | `get_attendance`        | Experimental | Heuristic date/minute extraction.                                |
 | `get_news`              | Experimental | Parses startpage headings + bodies.                              |
@@ -371,6 +373,24 @@ All tools accept no arguments unless noted.
 
   Defaults to the current month; pass `year` and `month` (1-12) for
   another. Read only — the page can change times, this tool never does.
+
+### Student documents (IUP)
+
+- **`get_student_documents(student_id?: int)`** — Elevdokument: every IUP
+  / development-talk document, with a status cell per subject plus
+  "Övrigt" and "Allmänt omdöme" saying which of staff, pupil and guardian
+  have written their part and which are still awaited. `guardian_pending`
+  lists the parts the family is expected to write before the next talk;
+  empty is the normal state and worth saying.
+- **`get_student_document(doc_id: int, student_id?: int, part_type? = 4, subject_id? = 0)`**
+  — One part in full. The defaults select the general assessment, which is
+  where the IUP text lives: the goals agreed at the development talk, the
+  method and who is responsible, how the child says they are doing, and who
+  was in the room — grouped in `blocks` by who wrote them, dated and signed.
+
+  This is the child's own words about school as well as the school's. Quote
+  it; do not paraphrase it into something the child did not say. The page
+  is named "edit" and renders read-only for a guardian; nothing here posts.
 
 ### Grades
 

@@ -1093,5 +1093,88 @@ class FritidsTimes(BaseModel):
     as_of: AsOf | None = None
 
 
+class DocumentPartStatus(BaseModel):
+    """One cell of the Elevdokument grid: who has filled in this part."""
+
+    column: str = Field(description='Subject code or "Övrigt" / "Allmänt omdöme".')
+    part_type: int | None = Field(
+        default=None,
+        description="Pass to ``get_student_document`` as ``part_type``. 4 is the "
+        "general assessment, where the IUP text lives; 1 is a subject part.",
+    )
+    subject_id: int | None = Field(
+        default=None, description="Pass to ``get_student_document`` as ``subject_id``."
+    )
+    filled_by: list[str] = Field(
+        default_factory=list,
+        description="Roles whose answer is in: staff, pupil, guardian.",
+    )
+    awaiting: list[str] = Field(
+        default_factory=list,
+        description="Roles whose answer is still missing. ``guardian`` here is "
+        "something the family is expected to write before the next talk.",
+    )
+
+
+class StudentDocument(BaseModel):
+    """One IUP / development-talk document in the grid."""
+
+    doc_id: int | None = None
+    title: str = Field(default="", description='e.g. "IUP VT 2026".')
+    parts: list[DocumentPartStatus] = Field(default_factory=list)
+
+
+class StudentDocumentList(BaseModel):
+    """Elevdokument: every IUP and its fill-in status per subject."""
+
+    school: str
+    student_id: int | None = None
+    documents: list[StudentDocument] = Field(default_factory=list)
+    guardian_pending: list[str] = Field(
+        default_factory=list,
+        description='Parts still waiting for the guardian, as "<title> / <column>". '
+        "Empty is the normal state and worth saying.",
+    )
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class DocumentSection(BaseModel):
+    number: int | None = None
+    label: str = Field(default="", description='e.g. "Mina mål", "Närvarande".')
+    text: str = ""
+
+
+class DocumentBlock(BaseModel):
+    """What one role wrote in a document part."""
+
+    role: str = Field(default="", description='As the page titles it, e.g. "Elevens eget omdöme".')
+    written: str | None = Field(default=None, description="ISO date the block was written.")
+    updated: str | None = Field(default=None, description="ISO date of the last update.")
+    updated_by: str = ""
+    sections: list[DocumentSection] = Field(default_factory=list)
+
+
+class StudentDocumentDetail(BaseModel):
+    """One part of an IUP in full.
+
+    The goals agreed at the development talk, the method and who is
+    responsible, how the child says they are doing, and who was present.
+    This is the child's own words about school as well as the school's;
+    treat it with the care that implies.
+    """
+
+    school: str
+    doc_id: int
+    part_type: int
+    subject_id: int
+    title: str = ""
+    part_label: str = Field(default="", description='e.g. "Andras omdöme".')
+    subject_label: str = ""
+    blocks: list[DocumentBlock] = Field(default_factory=list)
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
 HomeworkItem.model_rebuild()
 PlanningPart.model_rebuild()
