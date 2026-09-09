@@ -350,11 +350,50 @@ class UnreportedAbsenceEvent(BaseModel):
         default="",
         description='School-side status note, e.g. "SMS skickades", "Korrigerad anmälan".',
     )
+    acknowledged_by: str = Field(
+        default="",
+        description="Guardian who ticked \"tagit del av\" for this lesson. Empty "
+        "means nobody has yet.",
+    )
+    acknowledged_at: str = Field(
+        default="",
+        description='When it was acknowledged, as the page prints it, e.g. '
+        '"2026-09-09 7:11".',
+    )
+    school_confirmed: str = Field(
+        default="",
+        description='Contents of the "Bekräftad av skolan" column. Usually empty.',
+    )
 
 
 class UnreportedAbsenceList(BaseModel):
+    """Unreported absence, split by whether a guardian has acknowledged it.
+
+    SchoolSoft texts a guardian when a lesson is missed, and the guardian is
+    then expected to open the page and confirm they have seen it. The page
+    shows the two groups in separate tables with the same columns, so a
+    parser that takes the first table it recognises reports weeks-old,
+    already-handled absences as outstanding — every day, forever.
+    """
+
     school: str
-    events: list[UnreportedAbsenceEvent]
+    events: list[UnreportedAbsenceEvent] = Field(
+        default_factory=list,
+        description="Absences NOT yet acknowledged — the ones to act on. A "
+        "guardian has to open SchoolSoft and confirm each; this server "
+        "deliberately does not do it for them.",
+    )
+    acknowledged: list[UnreportedAbsenceEvent] = Field(
+        default_factory=list,
+        description="Absences a guardian has already confirmed, with who and "
+        "when. History, not a to-do list. Do not report these as new.",
+    )
+    confirmed_none_pending: bool = Field(
+        default=False,
+        description="True when the page itself stated there is nothing to "
+        "acknowledge. An empty ``events`` without this flag means the parser "
+        "found no rows, which is not the same as the school saying so.",
+    )
     note: str | None = None
     as_of: AsOf | None = None
 

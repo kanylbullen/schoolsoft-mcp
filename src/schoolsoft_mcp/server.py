@@ -1112,12 +1112,25 @@ async def get_unreported_absence(
     ctx: Context[Any, AppContext, Any],
     student_id: int | None = None,
 ) -> UnreportedAbsenceList:
-    """Return unreported-absence events for the active child.
+    """Return unreported absence, split by whether it has been acknowledged.
 
-    Maps to Frånvaro → Oanmäld frånvaro. Each event has the week, weekday,
-    lesson (time + subject) and a school-side status message
-    (e.g. "SMS skickades", "Korrigerad anmälan"). These are the rows that
-    typically need a parent to file an absence report.
+    Maps to Frånvaro → Oanmäld frånvaro. SchoolSoft texts a guardian when a
+    lesson is missed, and the guardian is then expected to open that page
+    and confirm they have seen it.
+
+    ``events`` holds only the absences **still awaiting** that confirmation
+    — the ones to act on. Rows a guardian has already confirmed stay on the
+    page permanently and are returned separately in ``acknowledged``, with
+    who confirmed and when. Reporting the second group as new is a false
+    alarm that repeats every morning.
+
+    ``confirmed_none_pending`` distinguishes "the page said there is
+    nothing" from "we parsed nothing", which are not the same thing.
+
+    This tool only reads. Confirming an absence is the guardian's own
+    attestation that they have seen it, so it is not automated here: a
+    robot ticking it means the school's record says a parent took note
+    when nobody did.
     """
     app = _app(ctx)
     async with app.lock:

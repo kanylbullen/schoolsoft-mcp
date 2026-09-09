@@ -41,6 +41,8 @@ UNREPORTED_ABSENCE_PATHS = (
 )
 
 _WEEK_LABEL_RE = re.compile(r"^v\.?\s*(\d{1,3})$", re.IGNORECASE)
+# Trailing "2026-09-09 7:11" in the "Tagit del av" cell.
+_ACK_STAMP_RE = re.compile(r"(\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}[:.]\d{2})?)\s*$")
 _COUNT_RE = re.compile(r"(\d+)\s*st", re.IGNORECASE)
 _PERCENT_RE = re.compile(r"\(?([\d.,]+)\s*%\)?")
 
@@ -133,15 +135,63 @@ def _parse_attendance_row(row: Tag) -> AttendanceWeek | None:
     return AttendanceWeek(**fields, **flat)  # type: ignore[arg-type]
 
 
+# Header text -> field, so the two layouts (the "still to acknowledge" table
+# and the wider "already acknowledged" one) are read by name rather than by
+# position. Position matching is what made the second look like the first.
+_ABSENCE_COLS: tuple[tuple[str, str], ...] = (
+    ("vecka", "week"),
+    ("dag", "day"),
+    ("lektion", "lesson"),
+    ("meddelande", "message"),
+    ("tagit del av", "acknowledged"),
+    ("bekr\u00e4ftad av skolan", "school_confirmed"),
+)
+
+# The banner the page shows when nothing is outstanding.
+_NONE_PENDING = "ingen oanm\u00e4ld fr\u00e5nvaro att ta del av"
+
+
+def _absence_columns(header_cells: list[str]) -> dict[str, int] | None:
+    """Map a header row to ``{field: index}``, or None if it is not the table."""
+    found: dict[str, int] = {}
+    for index, cell in enumerate(header_cells):
+        text = cell.strip().lower()
+        for needle, field in _ABSENCE_COLS:
+            if needle in text:
+                found.setdefault(field, index)
+    if "week" in found and "lesson" in found:
+        return found
+    return None
+
+
+def _cell(cells: list[Tag], cols: dict[str, int], field: str) -> str:
+    index = cols.get(field)
+    if index is None or index >= len(cells):
+        return ""
+    return cells[index].get_text(" ", strip=True).replace("\xa0", " ").strip()
+
+
 def parse_unreported_absence(html: str, *, school: str) -> UnreportedAbsenceList:
-    """Parse Frånvaro → Oanmäld frånvaro into a flat list of events.
+    """Parse Fr\u00e5nvaro -> Oanm\u00e4ld fr\u00e5nvaro, split by acknowledgement.
+
+    SchoolSoft texts a guardian when a lesson is missed and then expects
+    them to open this page and confirm they have seen it. Confirmed rows
+    stay on the page permanently, in a second table with the same columns
+    plus "Tagit del av" — so reading the first recognisable table reports
+    absences from weeks ago as outstanding, which is a false alarm every
+    morning until somebody stops believing the alarm.
+
+    A row counts as acknowledged when its "Tagit del av" cell has content.
+    That is a property of the row, so it holds whichever table it came from
+    and in whatever order the tables appear.
 
     The page uses ``&nbsp;`` in week and day cells to indicate "same as
     previous row" (visual continuation). We forward-fill week and day so
     every event has them populated.
     """
     soup = BeautifulSoup(html, "lxml")
-    events: list[UnreportedAbsenceEvent] = []
+    pending: list[UnreportedAbsenceEvent] = []
+    acknowledged: list[UnreportedAbsenceEvent] = []
 
     for table in soup.find_all("table"):
         if not isinstance(table, Tag):
@@ -150,51 +200,81 @@ def parse_unreported_absence(html: str, *, school: str) -> UnreportedAbsenceList
         if len(rows) < 2:
             continue
         header_cells = [c.get_text(" ", strip=True) for c in rows[0].find_all("td")]
-        header_lower = [h.lower() for h in header_cells]
-        if not (
-            any("vecka" in h for h in header_lower)
-            and any("lektion" in h for h in header_lower)
-        ):
+        cols = _absence_columns(header_cells)
+        if cols is None:
             continue
 
         last_week: int | None = None
         last_day = ""
         for row in rows[1:]:
-            cells = [c.get_text(" ", strip=True) for c in row.find_all("td")]
+            cells = row.find_all("td")
             if len(cells) < 3:
                 continue
-            week_str = cells[0].strip().replace("\xa0", " ")
-            day = cells[1].strip().replace("\xa0", " ")
-            lesson = cells[2].strip()
-            message = cells[3].strip() if len(cells) > 3 else ""
+
+            lesson = _cell(cells, cols, "lesson")
             if not lesson:
                 continue
 
-            week_match = _WEEK_LABEL_RE.match(week_str)
+            week_match = _WEEK_LABEL_RE.match(_cell(cells, cols, "week"))
             if week_match:
                 last_week = int(week_match.group(1))
+            day = _cell(cells, cols, "day")
             if day:
                 last_day = day
             if last_week is None:
                 continue
 
-            events.append(
-                UnreportedAbsenceEvent(
-                    week=last_week,
-                    day=last_day,
-                    lesson=lesson,
-                    message=message,
-                )
+            # "Johan Larsson 2026-09-09 7:11" — the page puts the timestamp
+            # after a <br>, so it arrives glued to the name.
+            ack = _cell(cells, cols, "acknowledged")
+            ack_at = ""
+            if ack:
+                stamp = _ACK_STAMP_RE.search(ack)
+                if stamp:
+                    ack_at = stamp.group(1)
+                    ack = ack[: stamp.start()].strip()
+
+            event = UnreportedAbsenceEvent(
+                week=last_week,
+                day=last_day,
+                lesson=lesson,
+                message=_cell(cells, cols, "message"),
+                acknowledged_by=ack,
+                acknowledged_at=ack_at,
+                school_confirmed=_cell(cells, cols, "school_confirmed"),
             )
-        break
+            (acknowledged if ack else pending).append(event)
+
+    confirmed_none = _NONE_PENDING in soup.get_text(" ", strip=True).lower()
 
     note: str | None = None
-    if not events:
+    if pending:
         note = (
-            "No unreported-absence entries found. Either none are outstanding "
-            "or the page layout differs — call "
+            f"{len(pending)} unreported absence(s) still awaiting a guardian's "
+            "acknowledgement in SchoolSoft (Fr\u00e5nvaro -> Oanm\u00e4ld fr\u00e5nvaro). "
+            "A guardian has to give that confirmation themselves; this server "
+            "does not send it."
+        )
+    elif confirmed_none:
+        note = "The page states there is no unreported absence to acknowledge."
+        if acknowledged:
+            note += (
+                f" {len(acknowledged)} earlier one(s) remain listed as already "
+                "acknowledged; that list is history, not outstanding work."
+            )
+    elif not acknowledged:
+        note = (
+            "No unreported-absence entries found, and the page did not state "
+            "that there are none. Either the layout differs or the section was "
+            "not rendered — call "
             "dump_page('jsp/student/right_parent_absence_message.jsp') and "
             "share a sanitised excerpt."
         )
 
-    return UnreportedAbsenceList(school=school, events=events, note=note)
+    return UnreportedAbsenceList(
+        school=school,
+        events=pending,
+        acknowledged=acknowledged,
+        confirmed_none_pending=confirmed_none,
+        note=note,
+    )
