@@ -1,6 +1,6 @@
 [
   {
-    "eventId": 5001,
+    "eventId": 900018,
     "name": "Slöjd",
     "description": "Slöjd",
     "startDate": "2026-05-18T08:50",
@@ -14,7 +14,7 @@
     "dayId": 0,
     "status": 2,
     "studentLessonStatus": {
-      "lessonId": 5001,
+      "lessonId": 900018,
       "status": 0,
       "statusType": 0,
       "week": 21,

@@ -1,7 +1,7 @@
 [
   {
-    "id": 1001,
-    "activityId": 2001,
+    "id": 900007,
+    "activityId": 900008,
     "title": "Diagnos kap.8",
     "subTitle": "ons 13 maj 00:00 - ons 20 maj 00:00, Diagnos, Moderna språk inom ramen för språkval",
     "read": true,
@@ -11,7 +11,7 @@
   },
   {
     "id": 1002,
-    "activityId": 2002,
+    "activityId": 900009,
     "title": "Reklamaffisch",
     "subTitle": "mån 11 maj 00:00 - tors 04 juni 00:00, Inlämningsuppgift, Bild",
     "read": true,

@@ -20,7 +20,7 @@ ROWS = [
         "friendlyUpdatedAt": "28 maj 13:28",
         "publishedAt": "2026-05-28T13:28:30",
         "friendlyPublishedAt": "28 maj 13:28",
-        "holisticAssessmentId": 5101,
+        "holisticAssessmentId": 900019,
         "published": True,
         "read": False,
     },
@@ -32,7 +32,7 @@ ROWS = [
         "friendlyUpdatedAt": "1 juni 09:00",
         "publishedAt": "2026-06-01T09:00:00",
         "friendlyPublishedAt": "1 juni 09:00",
-        "holisticAssessmentId": 5102,
+        "holisticAssessmentId": 900020,
         "published": True,
         "read": True,
     },
@@ -40,15 +40,15 @@ ROWS = [
         "title": "Hem- och konsumentkunskap",
         "subTitle": "Ingen bedömning",
         "subjectWarning": False,
-        "holisticAssessmentId": 5103,
+        "holisticAssessmentId": 900021,
         "published": False,
         "read": True,
     },
 ]
 
 OPTIONS = [
-    {"id": "5101", "path": "#/parent/holistic_assessment/5101", "label": "Bild (BL)"},
-    {"id": "5102", "path": "#/parent/holistic_assessment/5102", "label": "Matematik (MA)"},
+    {"id": "900019", "path": "#/parent/holistic_assessment/900019", "label": "Bild (BL)"},
+    {"id": "900020", "path": "#/parent/holistic_assessment/900020", "label": "Matematik (MA)"},
     {"id": "9999", "path": "#/parent/holistic_assessment/9999", "label": "Utan kod"},
 ]
 
@@ -133,7 +133,7 @@ class TestAssessedWork:
         {
             "gridColumnInfo": {"isReview": True},
             "id": 8803,
-            "activityId": 6003,
+            "activityId": 900024,
             "name": "Affisch i tuschteknik",
             "type": "Arbete under lektionstid",
             "review": "B",
@@ -158,8 +158,8 @@ class TestAssessedWork:
 class TestResults:
     ROWS: ClassVar[list[dict[str, object]]] = [
         {
-            "assignmentId": 8801,
-            "activityId": 6001,
+            "assignmentId": 900032,
+            "activityId": 900022,
             "title": "Prov om krafter",
             "subjects": [{"name": "Fysik", "color": "#985de6"}],
             "assignmentType": "Prov",
@@ -168,8 +168,8 @@ class TestResults:
             "read": True,
         },
         {
-            "assignmentId": 8802,
-            "activityId": 6002,
+            "assignmentId": 900033,
+            "activityId": 900023,
             "title": "Matteläxa",
             "subjects": [{"name": "Matematik"}],
             "assignmentType": "Läxa",
@@ -195,10 +195,10 @@ class TestResults:
 class TestOpenWork:
     ROWS: ClassVar[list[dict[str, object]]] = [
         {
-            "id": 8804,
+            "id": 900034,
             "partId": None,
             "entityType": "ASSIGNMENT",
-            "activityId": 6004,
+            "activityId": 900025,
             "title": "Formövning i tre delar",
             "type": "Arbete under lektionstid",
             "endDate": "2026-09-14",
@@ -212,7 +212,7 @@ class TestOpenWork:
         {
             "id": 8805,
             "entityType": "ASSIGNMENT",
-            "activityId": 6005,
+            "activityId": 900026,
             "title": "Förhör kapitel 1",
             "type": "Diagnos",
             "endDate": "2026-09-08",
@@ -252,7 +252,7 @@ class TestHistory:
     def test_earlier_terms_come_out(self) -> None:
         out = asm.parse_history(
             [
-                {"assessmentId": 5101, "current": True, "reportingOccasion": None},
+                {"assessmentId": 900019, "current": True, "reportingOccasion": None},
                 {
                     "assessmentId": 4161,
                     "current": False,
@@ -273,6 +273,6 @@ class TestPaths:
         )
 
     def test_extra_slots_fill_too(self) -> None:
-        assert asm.path_for(asm.ASSESSMENT_WORK, 2, assessment_id=5101) == (
-            "rest-api/parent/holistic_assessment/5101/assessed_assignments"
+        assert asm.path_for(asm.ASSESSMENT_WORK, 2, assessment_id=900019) == (
+            "rest-api/parent/holistic_assessment/900019/assessed_assignments"
         )

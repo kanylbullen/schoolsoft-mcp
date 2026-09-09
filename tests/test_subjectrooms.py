@@ -146,18 +146,18 @@ class TestPayloadParsers:
     def test_rooms(self) -> None:
         payload = [
             {
-                "activityId": 7001,
+                "activityId": 900027,
                 "subject": "Idrott och hälsa",
                 "groupNames": ["7"],
                 "color": "#d9de2d",
                 "access": False,
                 "isSubjectRoom": True,
             },
-            {"activityId": 6004, "subject": "Bild", "groupNames": ["7"], "color": ""},
+            {"activityId": 900025, "subject": "Bild", "groupNames": ["7"], "color": ""},
         ]
         result = sr.parse_rooms(payload, school="yourschool")
         assert [r.subject for r in result.rooms] == ["Bild", "Idrott och hälsa"]
-        assert result.rooms[1].activity_id == 7001
+        assert result.rooms[1].activity_id == 900027
         assert result.note is None
 
     def test_rooms_empty_explains_itself(self) -> None:
@@ -175,9 +175,9 @@ class TestPayloadParsers:
     def test_planning_row(self) -> None:
         row = sr.parse_planning_row(
             {
-                "planningPartId": 720,
-                "planningId": 504,
-                "activityId": 7001,
+                "planningPartId": 900005,
+                "planningId": 900004,
+                "activityId": 900027,
                 "planningTitle": "",
                 "planningPartTitle": "Idrott och hälsa terminen",
                 "subjects": [{"name": "Idrott och hälsa", "color": "#d9de2d"}],
@@ -189,15 +189,15 @@ class TestPayloadParsers:
                 "read": True,
             }
         )
-        assert row["part_id"] == 720
+        assert row["part_id"] == 900005
         assert row["subject"] == "Idrott och hälsa"
         assert row["start_date"] == "2026-08-19"
 
     def test_assignment_row(self) -> None:
         row = sr.parse_assignment_row(
             {
-                "assignmentId": 8804,
-                "activityId": 6004,
+                "assignmentId": 900034,
+                "activityId": 900025,
                 "title": "Skiss i tusch",
                 "subjects": [{"name": "Bild", "color": "#d5a3ab"}],
                 "assignmentType": "Arbete under lektionstid",
@@ -273,8 +273,8 @@ class TestPaths:
 
     def test_path_fills_both_slots(self) -> None:
         assert (
-            sr.path(sr.PLANNING_PART_VIEW, 2, part_id=720)
-            == "rest-api/parent/ps/planning_parts/720/view"
+            sr.path(sr.PLANNING_PART_VIEW, 2, part_id=900005)
+            == "rest-api/parent/ps/planning_parts/900005/view"
         )
         assert sr.path(sr.ROOMS_ALL, 1) == "rest-api/student/ps/subjectroom/all"
 
@@ -314,7 +314,7 @@ def _planning(**kw: object) -> PlanningPart:
 IDROTT_PLANNING = _planning(
     title="Idrott och hälsa terminen",
     subject="Idrott och hälsa",
-    activity_id=7001,
+    activity_id=900027,
     body=sr.html_to_text(IDROTT_BODY_HTML),
     week_lines=["v.38 Terränglöpning, samling vid spårcentralen 8:20."],
 )
@@ -324,11 +324,11 @@ class TestActivityJoin:
     def test_schedule_abbreviation_joins_to_full_subject_name(self) -> None:
         # The schedule says "ID", the planning says "Idrott och hälsa".
         lesson = _FakeLesson(subject="ID")
-        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 7001
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 900027
 
     def test_notes_are_used_when_subject_is_a_code(self) -> None:
         lesson = _FakeLesson(subject="XX", notes="Idrott")
-        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 7001
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 900027
 
     def test_unrelated_subject_does_not_join(self) -> None:
         assert sr.activity_for_lesson(_FakeLesson(subject="MA"), [IDROTT_PLANNING]) == -1
@@ -356,7 +356,7 @@ class TestDayLessons:
         slojd = _planning(
             title="Slöjd",
             subject="Slöjd",
-            activity_id=7007,
+            activity_id=900030,
             body="Ni gör en skrivbordförvaring för tex pennor.",
         )
         out = sr.day_lessons([_FakeLesson(subject="Slöjd")], [slojd], "monday")
@@ -377,7 +377,7 @@ class TestPreparationNotes:
         bio = _planning(
             title="Fältstudie",
             subject="Biologi",
-            activity_id=7008,
+            activity_id=900031,
             body="Samling vid busshållplatsen 08:00, ta med matsäck.",
         )
         lessons = sr.day_lessons([_FakeLesson(subject="Biologi")], [bio], "monday")
@@ -386,7 +386,7 @@ class TestPreparationNotes:
         assert "Samling vid busshållplatsen" in notes[0]
 
     def test_ordinary_lesson_is_not_listed(self) -> None:
-        ma = _planning(title="Matte", subject="Matematik", activity_id=7004, body="sid 24")
+        ma = _planning(title="Matte", subject="Matematik", activity_id=900028, body="sid 24")
         lessons = sr.day_lessons([_FakeLesson(subject="Matematik")], [ma], "monday")
         assert sr.preparation_notes(lessons, week=38) == []
 
@@ -401,7 +401,7 @@ class TestPreparationNotes:
         idrott_other_week = _planning(
             title="Idrott och hälsa terminen",
             subject="Idrott och hälsa",
-            activity_id=7001,
+            activity_id=900027,
             body="v.34 Friidrott (samling vid klubbstugan)\nv.35 Innebandy",
             mentions_weeks=True,
         )
@@ -454,8 +454,8 @@ class TestWeekLineHygiene:
 class TestActivityJoinPrecision:
     """The short subject code is lossy; a wrong planning is worse than none."""
 
-    BILD = _planning(title="Terminsplanering", subject="Bild", activity_id=6004, body="x")
-    BIOLOGI = _planning(title="Cellen", subject="Biologi", activity_id=7008, body="y")
+    BILD = _planning(title="Terminsplanering", subject="Bild", activity_id=900025, body="x")
+    BIOLOGI = _planning(title="Cellen", subject="Biologi", activity_id=900031, body="y")
 
     def test_bi_does_not_pick_up_bild(self) -> None:
         # "bild".startswith("bi") — a permissive prefix match hung the art
@@ -465,25 +465,25 @@ class TestActivityJoinPrecision:
 
     def test_bi_still_finds_biologi(self) -> None:
         lesson = _FakeLesson(subject="BI", notes="Biologi")
-        assert sr.activity_for_lesson(lesson, [self.BILD, self.BIOLOGI]) == 7008
+        assert sr.activity_for_lesson(lesson, [self.BILD, self.BIOLOGI]) == 900031
 
     def test_bild_still_matches_bild(self) -> None:
         lesson = _FakeLesson(subject="Bild", notes="Bild")
-        assert sr.activity_for_lesson(lesson, [self.BILD, self.BIOLOGI]) == 6004
+        assert sr.activity_for_lesson(lesson, [self.BILD, self.BIOLOGI]) == 900025
 
     def test_id_still_matches_idrott_och_halsa_by_prefix(self) -> None:
         lesson = _FakeLesson(subject="ID", notes="Idrott")
-        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING, self.BILD]) == 7001
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING, self.BILD]) == 900027
 
     def test_ambiguous_prefix_refuses_to_guess(self) -> None:
-        other = _planning(title="Idrottsdag", subject="Idrottslära", activity_id=999, body="z")
+        other = _planning(title="Idrottsdag", subject="Idrottslära", activity_id=900006, body="z")
         lesson = _FakeLesson(subject="XX", notes="Idrott")
         assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING, other]) == -1
 
     def test_code_is_not_retried_when_the_full_name_missed(self) -> None:
         # notes says Spanska, no Spanska planning exists; falling back to the
         # code "Sp" would match "Språkval" and attach someone else's plan.
-        sprakval = _planning(title="Franska", subject="Språkval", activity_id=6005, body="q")
+        sprakval = _planning(title="Franska", subject="Språkval", activity_id=900026, body="q")
         lesson = _FakeLesson(subject="Sp", notes="Spanska")
         assert sr.activity_for_lesson(lesson, [sprakval]) == -1
 
@@ -566,7 +566,7 @@ class TestWeekOrganisedBodyIsNotReusedForOtherWeeks:
     TERM_PLAN = _planning(
         title="Idrott och hälsa terminen",
         subject="Idrott och hälsa",
-        activity_id=7001,
+        activity_id=900027,
         body="v.34 Friidrott (samling vid klubbstugan)\nv.35 Innebandy",
         mentions_weeks=True,
     )
@@ -586,7 +586,7 @@ class TestWeekOrganisedBodyIsNotReusedForOtherWeeks:
         prose = _planning(
             title="Slöjd",
             subject="Slöjd",
-            activity_id=7007,
+            activity_id=900030,
             body="Ni gör en skrivbordsförvaring.",
             mentions_weeks=False,
         )
@@ -600,19 +600,19 @@ class TestJoinWithAnnotatedNotes:
     def test_an_annotation_does_not_block_an_exact_subject_match(self) -> None:
         # "Ombyte" is not a subject; the row's own subject is exact.
         lesson = _FakeLesson(subject="Idrott och hälsa", notes="Ombyte")
-        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 7001
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 900027
 
     def test_an_annotation_still_cannot_license_a_prefix_match(self) -> None:
         # Prefix matching is where the short code is dangerous, so a lesson
         # whose only full-name candidate is an annotation stays unmatched
         # rather than falling back to "BI" and picking up "Bild".
-        bild = _planning(title="Terminsplanering", subject="Bild", activity_id=6004)
+        bild = _planning(title="Terminsplanering", subject="Bild", activity_id=900025)
         lesson = _FakeLesson(subject="BI", notes="Diagnos")
         assert sr.activity_for_lesson(lesson, [bild]) == -1
 
     def test_the_matched_activity_id_is_reported_on_the_lesson(self) -> None:
         out = sr.day_lessons([_FakeLesson(subject="ID")], [IDROTT_PLANNING], "monday")
-        assert out[0].activity_id == 7001
+        assert out[0].activity_id == 900027
 
     def test_an_unmatched_lesson_reports_no_activity_id(self) -> None:
         out = sr.day_lessons([_FakeLesson(subject="MA")], [IDROTT_PLANNING], "monday")
@@ -746,7 +746,7 @@ class TestMentionsWeeksReachesTheModel:
             body=view["body"],
             week_lines=view["week_lines"],
             mentions_weeks=bool(view["mentions_weeks"]),
-            activity_id=7006,
+            activity_id=900029,
             subject="Historia",
         )
         assert part.mentions_weeks is True

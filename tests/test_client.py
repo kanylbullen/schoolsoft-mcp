@@ -276,11 +276,11 @@ async def test_rejected_selection_is_rolled_back(client: SchoolSoftClient) -> No
         httpx.Response(400, json={"error": "bad orgId"}),
     ]
 
-    await client.select_child(4711, 175)
+    await client.select_child(900017, 175)
     with pytest.raises(SchoolSoftAuthError):
         await client.select_child(4712, 1)
 
-    assert client.active_child == (4711, 175)
+    assert client.active_child == (900017, 175)
     await client.close()
 
 
@@ -302,7 +302,7 @@ async def test_select_child_reauths_on_an_expired_session(
         httpx.Response(200, json={}),
     ]
 
-    await client.select_child(4711, 175)
+    await client.select_child(900017, 175)
     await client.select_child(4712, 175)
 
     assert client.active_child == (4712, 175)
