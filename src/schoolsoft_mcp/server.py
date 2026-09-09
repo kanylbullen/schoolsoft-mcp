@@ -53,6 +53,8 @@ from .models import (
     PlanningDetail,
     PlanningList,
     PlanningPart,
+    ResultCriterion,
+    ResultDetail,
     ResultEntry,
     ResultList,
     ScheduleWeek,
@@ -1798,11 +1800,12 @@ async def get_results(
 
     Says *that* a result was published, for which assignment, by which
     teacher and when. It does **not** carry the grade — SchoolSoft's results
-    list has no such field. The grade sits on the subject's assessment:
-    ``get_assessment_detail(...).assessed_work[].grade``.
+    list has no such field. The result itself is on
+    ``get_result_detail(assignment_id)``: its ``review`` is the grade or
+    wording, with the teacher's comment and the criteria levels reached.
 
     Use this to spot what is new since a family last looked; use
-    ``get_assessment_detail`` to find out what the result actually was.
+    ``get_result_detail`` to find out what the result actually was.
     """
     app = _app(ctx)
     async with app.lock:
@@ -1819,11 +1822,63 @@ async def get_results(
             results=results,
             unread=unread,
             note=(
-                "Results carry no grade on this endpoint. For the grade, call "
-                "get_assessment_detail for the subject and read assessed_work."
+                "Results carry no grade on this endpoint. For the result "
+                "itself, call get_result_detail(assignment_id) and read review."
                 if results
                 else "No published results."
             ),
+        )
+    )
+
+
+@mcp.tool()
+async def get_result_detail(
+    ctx: Context[Any, AppContext, Any],
+    assignment_id: int,
+    student_id: int | None = None,
+) -> ResultDetail:
+    """Return one published result in full: the review, comment and criteria.
+
+    ``assignment_id`` is the ``assignment_id`` from ``get_results``. This is
+    what a guardian sees after clicking a row in the results list:
+    ``review`` is the result itself — a letter grade ("B"), the school's
+    wording ("Når målen väl") or "Ej närvarande" for a missed test — plus
+    the teacher's comment and, when the teacher assessed against criteria,
+    the level reached per criterion with its text.
+
+    Unlike ``get_assessment_detail`` this also works on grading years, where
+    the subject assessment (Sammantagen bedömning) has no assessed work
+    behind it and the result is only reachable here.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        payload = await app.client.fetch_json(
+            asm.path_for(
+                asm.ASSIGNMENT_ASSESSMENT,
+                app.settings.usertype,
+                assignment_id=assignment_id,
+            )
+        )
+    parsed = asm.parse_result_assessment(payload)
+    criteria = [ResultCriterion(**c) for c in parsed["criteria"]]
+    note = None
+    if not parsed["review"] and not parsed["teacher_comment"] and not criteria:
+        note = (
+            "Published as assessed, but with no review, comment or criteria "
+            "the guardian can read."
+        )
+    return _stamp(
+        ResultDetail(
+            school=app.settings.school,
+            student_id=student_id,
+            assignment_id=assignment_id,
+            review=parsed["review"],
+            teacher_comment=parsed["teacher_comment"],
+            student_comment=parsed["student_comment"],
+            criteria=criteria,
+            partial_moment_count=parsed["partial_moment_count"],
+            note=note,
         )
     )
 

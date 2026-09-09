@@ -923,16 +923,56 @@ class ResultList(BaseModel):
     """Published results.
 
     SchoolSoft's results list carries no grade value; it says *that* a result
-    was published, not what it was. The grade lives on the subject's
-    assessment — see ``get_assessment_detail``, whose ``assessed_work``
-    carries it. This model therefore has no grade field rather than an empty
-    one that would read as "no grade given".
+    was published, not what it was. The result itself is one call further in:
+    ``get_result_detail(assignment_id)``, whose ``review`` carries it. This
+    model therefore has no grade field rather than an empty one that would
+    read as "no grade given".
     """
 
     school: str
     student_id: int | None = None
     results: list[ResultEntry] = Field(default_factory=list)
     unread: int = 0
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class ResultCriterion(BaseModel):
+    """One criterion level reached on an assessed assignment."""
+
+    subject: str = ""
+    level: str = Field(default="", description='e.g. "Når C nivå".')
+    level_enum: str = Field(default="", description='e.g. "MEET_C_LEVEL".')
+    criterion: str = Field(
+        default="", description="The criterion text for the level reached."
+    )
+
+
+class ResultDetail(BaseModel):
+    """One published result in full — what a guardian sees on the result page.
+
+    ``review`` is the result: a letter grade ("B"), the school's own wording
+    ("Når målen väl", "Uppnått målen") or "Ej närvarande" for a missed test.
+    An empty ``review`` with an empty comment means the teacher published
+    the assignment as assessed without writing anything the guardian can
+    read.
+    """
+
+    school: str
+    student_id: int | None = None
+    assignment_id: int
+    review: str = Field(
+        default="",
+        description='The result itself: "B", "Når målen väl", "Ej närvarande" …',
+    )
+    teacher_comment: str = ""
+    student_comment: str = ""
+    criteria: list[ResultCriterion] = Field(default_factory=list)
+    partial_moment_count: int = Field(
+        default=0,
+        description="Number of partial moments (delmoment) on the assessment. "
+        "Only counted; the row shape has not been seen populated.",
+    )
     note: str | None = None
     as_of: AsOf | None = None
 

@@ -26,7 +26,8 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_day_briefing`      | Stable       | Joins a day's schedule to the plannings that apply to it.        |
 | `get_assessments`       | Stable       | Sammantagen bedömning, including the at-risk flag.               |
 | `get_assessment_detail` | Stable       | Teacher's text, graded work, warning motivation.                 |
-| `get_results`           | Stable       | Says a result was published; the grade is on the assessment.     |
+| `get_results`           | Stable       | Says a result was published; the result is on `get_result_detail`. |
+| `get_result_detail`     | Stable       | One result in full: review (grade/wording), comment, criteria.   |
 | `get_open_work`         | Stable       | What is outstanding, independent of week.                        |
 | `get_unreported_absence`| Stable       | Splits absences awaiting a guardian from ones already confirmed. |
 | `get_fritids_times`     | Stable       | After-school care: drop-off and pick-up per day, school hours beside them. |
@@ -328,8 +329,18 @@ All tools accept no arguments unless noted.
   Says *that* a result was published, for which assignment, by whom and
   when. It does **not** carry the grade: SchoolSoft's results list has no
   such field, and the model has no empty `grade` that would read as "no
-  grade given". For the grade, call `get_assessment_detail` and read
-  `assessed_work`.
+  grade given". For the result itself, call `get_result_detail`.
+- **`get_result_detail(assignment_id: int, student_id?: int)`** — One
+  published result in full, as the guardian sees it after clicking a row
+  in the results list.
+
+  `review` is the result: a letter grade (`"B"`), the school's wording
+  (`"Når målen väl"`) or `"Ej närvarande"` for a missed test. Alongside it
+  the teacher's comment and, when assessed against criteria, the level
+  reached per criterion with its text.
+
+  This works on grading years too, where `get_assessment_detail` has no
+  `assessed_work` behind the subject and the result is only reachable here.
 - **`get_open_work(student_id?: int, include_expired? = False, entity_type?: str)`**
   — Everything currently open, in due order, whatever week it falls in.
 

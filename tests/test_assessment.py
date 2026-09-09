@@ -192,6 +192,54 @@ class TestResults:
         assert "grade" not in asm.parse_result_rows(self.ROWS)[0]
 
 
+class TestResultDetail:
+    PAYLOAD: ClassVar[dict[str, object]] = {
+        "assessmentPartialMoments": [],
+        "review": "C",
+        "teacherComment": "Bra jobbat med säkerheten på labben.",
+        "studentComment": "",
+        "assessedCriteriaTabs": [
+            {
+                "content": {"type": "grade_subject", "id": 0, "typeId": 13, "name": "Kemi"},
+                "assessedCriteria": [
+                    {
+                        "level": {"levelEnum": "MEET_C_LEVEL", "value": 9, "description": "Når C nivå"},
+                        "steps": [
+                            {"gradeCriteriaGroupId": 1, "text": "E-text", "level": {"levelEnum": "MEET_E_LEVEL", "value": 7, "description": "E"}},
+                            {"gradeCriteriaGroupId": 1, "text": "C-text", "level": {"levelEnum": "MEET_C_LEVEL", "value": 9, "description": "C"}},
+                            {"gradeCriteriaGroupId": 1, "text": "A-text", "level": {"levelEnum": "MEET_A_LEVEL", "value": 11, "description": "A"}},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    def test_review_and_comment(self) -> None:
+        out = asm.parse_result_assessment(self.PAYLOAD)
+        assert out["review"] == "C"
+        assert out["teacher_comment"].startswith("Bra jobbat")
+        assert out["partial_moment_count"] == 0
+
+    def test_only_the_reached_level_text_is_kept(self) -> None:
+        out = asm.parse_result_assessment(self.PAYLOAD)
+        assert out["criteria"] == [
+            {"subject": "Kemi", "level": "Når C nivå", "level_enum": "MEET_C_LEVEL", "criterion": "C-text"}
+        ]
+
+    def test_missed_test_is_wording_not_grade(self) -> None:
+        out = asm.parse_result_assessment(
+            {"review": "Ej närvarande", "teacherComment": None, "assessedCriteriaTabs": []}
+        )
+        assert out["review"] == "Ej närvarande"
+        assert out["teacher_comment"] == ""
+        assert out["criteria"] == []
+
+    def test_garbage_payload_is_empty_not_error(self) -> None:
+        out = asm.parse_result_assessment("<html>")
+        assert out["review"] == "" and out["criteria"] == []
+
+
 class TestOpenWork:
     ROWS: ClassVar[list[dict[str, object]]] = [
         {

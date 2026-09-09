@@ -43,6 +43,14 @@ live parent account:
     together.
 ``ps/subjectroom/table/rows``
     Everything open right now, week-independent.
+``ps/assignment/<id>/assessment``
+    The result itself, as the guardian sees it after clicking a row in the
+    results list (the SPA routes to ``subjectrooms/<activity>/assignment/<id>``
+    and fetches this next to ``ps/assignments/<id>/view``). ``review`` is
+    the grade or wording ("B", "Når målen väl", "Ej närvarande"),
+    ``teacherComment`` the feedback, ``assessedCriteriaTabs`` the criteria
+    levels reached. Works on grading years too, where the subject
+    assessment has no assessed work behind it.
 """
 
 from __future__ import annotations
@@ -86,6 +94,7 @@ ASSESSMENT_HISTORY = (
 
 RESULT_ROWS = "rest-api/{ut}/ps/subjectroom/results/grid/rows"
 OPEN_WORK_ROWS = "rest-api/{ut}/ps/subjectroom/table/rows"
+ASSIGNMENT_ASSESSMENT = "rest-api/{ut}/ps/assignment/{assignment_id}/assessment"
 
 
 def path_for(template: str, usertype: int, **kwargs: Any) -> str:
@@ -247,6 +256,56 @@ def parse_result_rows(rows: Any) -> list[dict[str, Any]]:
         )
     out.sort(key=lambda r: r["published"] or "", reverse=True)
     return out
+
+
+def parse_result_assessment(payload: Any) -> dict[str, Any]:
+    """One assignment's published assessment from ``ps/assignment/<id>/assessment``.
+
+    ``review`` is the result. Criteria come as tabs per subject, each with
+    the level reached and the criterion text for every level; only the text
+    of the level reached is kept, since that is what the guardian is shown
+    highlighted. ``partial_moment_count`` is a count rather than a parse:
+    every live payload seen so far had an empty list, so its row shape is
+    unverified and inventing fields for it would read as data.
+    """
+    if not isinstance(payload, dict):
+        payload = {}
+    criteria: list[dict[str, Any]] = []
+    for tab in payload.get("assessedCriteriaTabs") or []:
+        if not isinstance(tab, dict):
+            continue
+        content = tab.get("content")
+        subject = _s(content, "name") if isinstance(content, dict) else ""
+        for item in tab.get("assessedCriteria") or []:
+            if not isinstance(item, dict):
+                continue
+            level = item.get("level")
+            level = level if isinstance(level, dict) else {}
+            reached = _s(level, "levelEnum")
+            text = ""
+            for step in item.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                step_level = step.get("level")
+                if isinstance(step_level, dict) and _s(step_level, "levelEnum") == reached:
+                    text = _s(step, "text")
+                    break
+            criteria.append(
+                {
+                    "subject": subject,
+                    "level": _s(level, "description"),
+                    "level_enum": reached,
+                    "criterion": text,
+                }
+            )
+    moments = payload.get("assessmentPartialMoments")
+    return {
+        "review": _s(payload, "review"),
+        "teacher_comment": _s(payload, "teacherComment"),
+        "student_comment": _s(payload, "studentComment"),
+        "criteria": criteria,
+        "partial_moment_count": len(moments) if isinstance(moments, list) else 0,
+    }
 
 
 def parse_open_work(rows: Any) -> list[dict[str, Any]]:
