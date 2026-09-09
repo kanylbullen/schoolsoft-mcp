@@ -20,7 +20,7 @@ This is a **public repository**. Treat every change with that in mind
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest          # 303 tests
+pytest          # 332 tests
 python scripts/check_pii.py  # no live-account data
 ruff check .    # lint
 mypy src        # strict type-check
@@ -47,6 +47,7 @@ src/schoolsoft_mcp/
   client.py          # SchoolSoftClient: httpx session, login, re-auth on 302
   config.py          # Settings.from_env() with validation
   models.py          # pydantic models returned by tools
+  cache.py           # in-process grid/body cache, fingerprint + TTL
   parsers/
     _fields.py       # shared JSON field accessors + the ISO-date regex
     assessment.py    # STABLE — sammantagen bedömning, results, open work

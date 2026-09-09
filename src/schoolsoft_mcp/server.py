@@ -9,12 +9,13 @@ import logging
 from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 
+from .cache import PlanningCache
 from .client import (
     SchoolSoftAccessError,
     SchoolSoftAuthError,
@@ -146,6 +147,7 @@ class AppContext:
     settings: Settings
     client: SchoolSoftClient
     lock: asyncio.Lock
+    cache: PlanningCache = field(default_factory=PlanningCache)
 
 
 def _build_client(settings: Settings) -> SchoolSoftClient:
@@ -163,7 +165,12 @@ def _build_client(settings: Settings) -> SchoolSoftClient:
 async def _lifespan(_server: FastMCP) -> AsyncIterator[AppContext]:
     settings = Settings.from_env()
     client = _build_client(settings)
-    ctx = AppContext(settings=settings, client=client, lock=asyncio.Lock())
+    ctx = AppContext(
+        settings=settings,
+        client=client,
+        lock=asyncio.Lock(),
+        cache=PlanningCache.from_settings(settings),
+    )
     try:
         yield ctx
     finally:
@@ -758,6 +765,7 @@ async def get_planning(
     student_id: int | None = None,
     include_body: bool = True,
     max_body_chars: int = 4000,
+    refresh: bool = False,
 ) -> PlanningList:
     """Return lesson plans (planeringar) in force during the given ISO week.
 
@@ -783,6 +791,13 @@ async def get_planning(
 
     Set ``include_body=False`` for a cheap listing. ``max_body_chars``
     truncates each body (term plans can run to several pages).
+
+    The grid and the bodies are served from an in-process cache: a term
+    plan is the same for weeks, and asking about it should not cost a
+    request per subject each time. A body is refetched when its grid row
+    changes (re-published, re-dated, marked unread) and after six hours
+    regardless. Pass ``refresh=True`` when a teacher is known to have just
+    edited something and the cache must not be trusted.
     """
     app = _app(ctx)
     now = _now_as_of()
@@ -792,11 +807,9 @@ async def get_planning(
 
     async with app.lock:
         await _select_child(app, student_id)
-        usertype = app.settings.usertype
+        student = _cache_student(app, student_id)
         try:
-            rows = await app.client.fetch_json(
-                sr.path(sr.PLANNING_ROWS, usertype)
-            )
+            rows = await _planning_grid(app, student=student, refresh=refresh)
         except _REST_ERRORS as err:
             logger.debug("Planning grid failed (%s), falling back to start-page", err)
             return _stamp(
@@ -818,7 +831,13 @@ async def get_planning(
             view: dict[str, Any] = {}
             if include_body and row["part_id"] is not None:
                 view = await _planning_part_view(
-                    app, row["part_id"], actual_week, max_body_chars
+                    app,
+                    row["part_id"],
+                    actual_week,
+                    max_body_chars,
+                    student=student,
+                    fingerprint=sr.row_fingerprint(row),
+                    refresh=refresh,
                 )
             items.append(
                 PlanningPart(
@@ -868,6 +887,7 @@ async def _fill_planning_bodies(
     week: int,
     max_body_chars: int,
     student_id: int | None,
+    refresh: bool = False,
 ) -> list[PlanningPart]:
     """Fetch bodies for just the plannings a given day needs.
 
@@ -881,11 +901,18 @@ async def _fill_planning_bodies(
     filled: list[PlanningPart] = []
     async with app.lock:
         await _select_child(app, student_id)
+        student = _cache_student(app, student_id)
         for item in items:
             if item.activity_id not in activity_ids or item.part_id is None:
                 continue
             view = await _planning_part_view(
-                app, item.part_id, week, max_body_chars
+                app,
+                item.part_id,
+                week,
+                max_body_chars,
+                student=student,
+                fingerprint=sr.row_fingerprint(item),
+                refresh=refresh,
             )
             filled.append(
                 item.model_copy(
@@ -905,22 +932,57 @@ async def _fill_planning_bodies(
     return filled
 
 
+def _cache_student(app: AppContext, student_id: int | None) -> int | None:
+    """The child the session is pointed at — the cache key after selection."""
+    active = app.client.active_child
+    return active[0] if active else student_id
+
+
+async def _planning_grid(
+    app: AppContext, *, student: int | None, refresh: bool = False
+) -> Any:
+    """The plannings grid, from cache while fresh. Caller must hold ``app.lock``.
+
+    Raises the fetch error; callers decide whether to fall back.
+    """
+    if not refresh:
+        cached = app.cache.get_grid(student)
+        if cached is not None:
+            return cached
+    rows = await app.client.fetch_json(sr.path(sr.PLANNING_ROWS, app.settings.usertype))
+    app.cache.put_grid(student, rows)
+    return rows
+
+
 async def _planning_part_view(
-    app: AppContext, part_id: int, week: int | None, max_body_chars: int | None
+    app: AppContext,
+    part_id: int,
+    week: int | None,
+    max_body_chars: int | None,
+    *,
+    student: int | None = None,
+    fingerprint: tuple[str, ...] | None = None,
+    refresh: bool = False,
 ) -> dict[str, Any]:
     """Fetch one planning part's body. Caller must hold ``app.lock``.
+
+    Served from cache while the grid row still fingerprints the same and
+    the entry is inside its TTL; ``refresh`` forces the request.
 
     A body that won't load must not take the whole listing down with it —
     a planning with a title and no text is still worth showing, and the
     empty ``body`` is itself the signal that something went wrong.
     """
-    try:
-        payload = await app.client.fetch_json(
-            sr.path(sr.PLANNING_PART_VIEW, app.settings.usertype, part_id=part_id)
-        )
-    except _REST_ERRORS as err:
-        logger.warning("Planning part %s body unavailable: %s", part_id, err)
-        return {}
+    payload = None if refresh else app.cache.get_body(student, part_id, fingerprint)
+    if payload is None:
+        try:
+            payload = await app.client.fetch_json(
+                sr.path(sr.PLANNING_PART_VIEW, app.settings.usertype, part_id=part_id)
+            )
+        except _REST_ERRORS as err:
+            logger.warning("Planning part %s body unavailable: %s", part_id, err)
+            return {}
+        app.cache.put_body(student, part_id, fingerprint, payload)
     return sr.parse_detail_view(payload, week=week, max_body_chars=max_body_chars)
 
 
@@ -950,6 +1012,7 @@ async def get_planning_detail(
     week: int | None = None,
     student_id: int | None = None,
     max_body_chars: int = 20000,
+    refresh: bool = False,
 ) -> PlanningDetail:
     """Return one planning in full, including attached files and links.
 
@@ -967,16 +1030,17 @@ async def get_planning_detail(
     now = _now_as_of()
     async with app.lock:
         await _select_child(app, student_id)
-        usertype = app.settings.usertype
-        payload = await app.client.fetch_json(
-            sr.path(sr.PLANNING_PART_VIEW, usertype, part_id=part_id)
+        student = _cache_student(app, student_id)
+        row = await _planning_row_for(app, part_id, student=student, refresh=refresh)
+        view = await _planning_part_view(
+            app,
+            part_id,
+            week if week is not None else now.iso_week,
+            max_body_chars,
+            student=student,
+            fingerprint=sr.row_fingerprint(row) if row else None,
+            refresh=refresh,
         )
-        view = sr.parse_detail_view(
-            payload,
-            week=week if week is not None else now.iso_week,
-            max_body_chars=max_body_chars,
-        )
-        row = await _planning_row_for(app, part_id)
         material = await _material_for(app, part_id)
 
     return _stamp(
@@ -992,12 +1056,16 @@ async def get_planning_detail(
     )
 
 
-async def _planning_row_for(app: AppContext, part_id: int) -> dict[str, Any]:
-    """Grid metadata (dates, teacher, status) for one part. Lock must be held."""
+async def _planning_row_for(
+    app: AppContext, part_id: int, *, student: int | None = None, refresh: bool = False
+) -> dict[str, Any]:
+    """Grid metadata (dates, teacher, status) for one part. Lock must be held.
+
+    Served from the grid cache: this used to download every planning the
+    child has to read one row's dates and teacher.
+    """
     try:
-        rows = await app.client.fetch_json(
-            sr.path(sr.PLANNING_ROWS, app.settings.usertype)
-        )
+        rows = await _planning_grid(app, student=student, refresh=refresh)
     except _REST_ERRORS as err:
         logger.debug("Planning grid unavailable for part %s: %s", part_id, err)
         return {}
@@ -1425,6 +1493,7 @@ async def get_day_briefing(
     student_id: int | None = None,
     news_days: int = 14,
     max_body_chars: int = 2000,
+    refresh: bool = False,
 ) -> DayBriefing:
     """Everything about one school day for one child, joined in a single call.
 
@@ -1511,6 +1580,7 @@ async def get_day_briefing(
             year=iso_year,
             student_id=student_id,
             include_body=False,
+            refresh=refresh,
         ),
         None,
     )
@@ -1554,6 +1624,7 @@ async def get_day_briefing(
             week=iso_week,
             max_body_chars=max_body_chars,
             student_id=student_id,
+            refresh=refresh,
         ),
         [],
     )

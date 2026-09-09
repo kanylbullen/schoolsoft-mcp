@@ -10,6 +10,21 @@ class ConfigError(Exception):
     """Raised when required configuration is missing or invalid."""
 
 
+
+
+def _seconds_env(name: str, default: float) -> float:
+    """A non-negative number of seconds from the environment, or ``default``."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as err:
+        raise ConfigError(f"{name} must be a number of seconds, got {raw!r}") from err
+    if value < 0:
+        raise ConfigError(f"{name} must not be negative, got {raw!r}")
+    return value
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     school: str
@@ -18,6 +33,10 @@ class Settings:
     usertype: int = 2
     base_url: str = "https://sms.schoolsoft.se"
     request_timeout: float = 20.0
+    # Seconds to serve the plannings grid and planning bodies from memory.
+    # 0 disables. See cache.py for why these two and why these defaults.
+    cache_grid_ttl: float = 600.0
+    cache_body_ttl: float = 6 * 3600.0
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -58,4 +77,6 @@ class Settings:
             password=password,
             usertype=usertype,
             base_url=base_url,
+            cache_grid_ttl=_seconds_env("SCHOOLSOFT_CACHE_GRID_TTL", 600.0),
+            cache_body_ttl=_seconds_env("SCHOOLSOFT_CACHE_BODY_TTL", 6 * 3600.0),
         )
