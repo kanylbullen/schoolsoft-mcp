@@ -814,6 +814,7 @@ async def get_planning(
                     status=row["status"],
                     body=view.get("body", ""),
                     week_lines=view.get("week_lines") or [],
+                    mentions_weeks=bool(view.get("mentions_weeks")),
                 )
             )
 
