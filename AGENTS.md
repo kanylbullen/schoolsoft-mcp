@@ -20,7 +20,7 @@ This is a **public repository**. Treat every change with that in mind
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest          # 232 tests
+pytest          # 262 tests
 ruff check .    # lint
 mypy src        # strict type-check
 ```
@@ -48,6 +48,7 @@ src/schoolsoft_mcp/
   models.py          # pydantic models returned by tools
   parsers/
     _fields.py       # shared JSON field accessors + the ISO-date regex
+    assessment.py    # STABLE — sammantagen bedömning, results, open work
     lunch.py         # STABLE — ported from a working HA integration
     subjectrooms.py  # STABLE — the REST planning/assignment surface
     schedule.py      # STABLE (REST rows, JSP fallback)
@@ -72,6 +73,10 @@ tests/
 | `get_exam_schedule`   | Stable       | Medium     | Dates are the announcement window   |
 | `get_lesson_detail`   | Stable       | Medium     | Room/teachers/group for one lesson  |
 | `get_day_briefing`    | Stable       | High       | Pure join over the tools above      |
+| `get_assessments`     | Stable       | High       | Warnings sort first; unread is real |
+| `get_assessment_detail`| Stable      | High       | `assessed_work[].grade` is the grade |
+| `get_results`         | Stable       | High       | No grade on this endpoint, by design |
+| `get_open_work`       | Stable       | Medium     | Mixes assignments and plannings      |
 | `get_attendance`      | Experimental | Low        | Needs real-school HTML sample       |
 | `get_news`            | Experimental | Low        | Needs real-school HTML sample       |
 | `get_messages`        | Experimental | Low        | Needs real-school HTML sample       |

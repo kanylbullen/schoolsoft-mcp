@@ -776,5 +776,196 @@ class DayBriefing(BaseModel):
     as_of: AsOf | None = None
 
 
+class SubjectAssessment(BaseModel):
+    """One subject's row in Sammantagen bedömning."""
+
+    assessment_id: int | None = Field(
+        default=None,
+        description="Pass to ``get_assessment_detail`` for the teacher's text, "
+        "the graded work behind it, and any warning motivation.",
+    )
+    subject: str = ""
+    subject_code: str = Field(
+        default="",
+        description='Short code as the schedule spells it, e.g. "IDH". Empty '
+        "when the subject list did not supply one.",
+    )
+    assessment: str = Field(
+        default="",
+        description='The school\'s wording, e.g. "Godtagbara kunskaper", "Mer '
+        'än godtagbara kunskaper", "Ingen bedömning".',
+    )
+    subject_warning: bool = Field(
+        default=False,
+        description="The school has flagged that this subject risks not "
+        "reaching the goals. This is the field a guardian most needs pushed "
+        "at them; ``get_assessment_detail`` carries the motivation.",
+    )
+    published: bool = True
+    read: bool = Field(
+        default=False, description="Whether a guardian has opened it."
+    )
+    updated_at: str | None = None
+    updated_label: str = Field(
+        default="", description='As the page prints it, e.g. "28 maj 13:28".'
+    )
+    published_at: str | None = None
+    published_label: str = ""
+
+
+class AssessmentList(BaseModel):
+    """Sammantagen bedömning for one child, warnings first.
+
+    This is what a Swedish school publishes for the years that carry no
+    formal grades. On those years ``get_grades`` is close to empty and this
+    holds everything the teachers have said.
+    """
+
+    school: str
+    student_id: int | None = None
+    subjects: list[SubjectAssessment] = Field(default_factory=list)
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Subjects flagged as at risk. Empty is the normal case "
+        "and is worth stating plainly rather than omitting.",
+    )
+    unread: int = 0
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class AssessedWork(BaseModel):
+    """A graded piece of work behind a subject assessment."""
+
+    assignment_id: int | None = None
+    activity_id: int | None = None
+    title: str = ""
+    kind: str = Field(default="", description='e.g. "Prov", "Arbete under lektionstid".')
+    grade: str = Field(
+        default="",
+        description='The grade the teacher set, e.g. "B". Empty means not '
+        "graded, or graded on criteria rather than a letter.",
+    )
+    points: str = ""
+    comment: str = Field(default="", description="Teacher's comment on this work.")
+
+
+class AssessmentTerm(BaseModel):
+    """The same subject at an earlier reporting occasion."""
+
+    assessment_id: int | None = None
+    current: bool = False
+    term: str = Field(default="", description='e.g. "HT 25".')
+    occasion_date: str | None = None
+
+
+class AssessmentDetail(BaseModel):
+    """One subject's assessment in full."""
+
+    school: str
+    assessment_id: int
+    student_name: str = ""
+    subject: str = ""
+    group: str = ""
+    publish_status: str = ""
+    assessment: str = Field(
+        default="", description="The school's wording for the knowledge level."
+    )
+    support_measures: str = Field(
+        default="",
+        description="Support the school has put in place. Empty is common.",
+    )
+    updated_by: str = Field(
+        default="", description='e.g. "Senast uppdaterad 28 maj 13:28 av <teacher>".'
+    )
+    subject_warning: bool = False
+    warning_published: bool = Field(
+        default=False,
+        description="An active warning that is not published is the school "
+        "still writing. Do not report it as something the family was told.",
+    )
+    warning_comment: str = ""
+    comments: list[str] = Field(
+        default_factory=list, description="Formative comments from the teacher."
+    )
+    assessed_work: list[AssessedWork] = Field(default_factory=list)
+    published_sections: list[str] = Field(
+        default_factory=list,
+        description="Which sections this school publishes to guardians, e.g. "
+        "ATTENDANCE, FORMATIVE_COMMENT, KNOWLEDGE_DEVELOPMENT. A section not "
+        "listed here is not withheld from you by this tool — the school does "
+        "not publish it.",
+    )
+    terms: list[AssessmentTerm] = Field(default_factory=list)
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class ResultEntry(BaseModel):
+    """A published result from the subject room's Resultat tab."""
+
+    assignment_id: int | None = None
+    activity_id: int | None = None
+    title: str = ""
+    subject: str = ""
+    kind: str = ""
+    teacher: str = ""
+    published: str | None = Field(
+        default=None, description="When the result was published."
+    )
+    read: bool = False
+
+
+class ResultList(BaseModel):
+    """Published results.
+
+    SchoolSoft's results list carries no grade value; it says *that* a result
+    was published, not what it was. The grade lives on the subject's
+    assessment — see ``get_assessment_detail``, whose ``assessed_work``
+    carries it. This model therefore has no grade field rather than an empty
+    one that would read as "no grade given".
+    """
+
+    school: str
+    student_id: int | None = None
+    results: list[ResultEntry] = Field(default_factory=list)
+    unread: int = 0
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
+class OpenWorkItem(BaseModel):
+    """A piece of work that is open right now, whatever week it falls in."""
+
+    entity_id: int | None = None
+    part_id: int | None = None
+    entity_type: str = Field(default="", description='e.g. "ASSIGNMENT".')
+    activity_id: int | None = None
+    title: str = ""
+    subject: str = ""
+    kind: str = ""
+    end_date: str | None = None
+    end_time: str = ""
+    status: str = Field(default="", description='e.g. "ONGOING".')
+    submission_status: str = ""
+    result_status: str = ""
+    read: bool = False
+
+
+class OpenWorkList(BaseModel):
+    """Everything currently open, in due order.
+
+    ``get_homework`` answers "what falls in week N". This answers "what is
+    outstanding", which is a different question — a task due in three weeks
+    is invisible to the first and present here.
+    """
+
+    school: str
+    student_id: int | None = None
+    items: list[OpenWorkItem] = Field(default_factory=list)
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
 HomeworkItem.model_rebuild()
 PlanningPart.model_rebuild()
