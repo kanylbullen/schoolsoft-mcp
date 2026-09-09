@@ -13,17 +13,27 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 
 ## Status
 
-| Tool              | Status          | Notes                                                         |
-| ----------------- | --------------- | ------------------------------------------------------------- |
-| `get_lunch_menu`  | Stable          | Ported from a working Home Assistant integration.             |
-| `get_schedule`    | Experimental    | Schedules are often JS-rendered; HTML scraping is best-effort.|
-| `get_homework`    | Experimental    | Page layouts vary per school.                                 |
-| `get_attendance`  | Experimental    | Heuristic date/minute extraction.                             |
-| `get_news`        | Experimental    | Parses startpage headings + bodies.                           |
-| `get_planning`    | Stable          | REST subject-room grid + per-planning body.                   |
-| `get_day_briefing`| Stable          | Joins schedule, plannings, assignments and exams for a day.   |
-| `get_messages`    | Experimental    | Subject/sender/date are heuristic.                            |
-| `dump_page`       | Debug           | Returns raw HTML so parsers can be improved.                  |
+| Tool                    | Status       | Notes                                                            |
+| ----------------------- | ------------ | ---------------------------------------------------------------- |
+| `get_lunch_menu`        | Stable       | Ported from a working Home Assistant integration.                |
+| `get_schedule`          | Stable       | REST calendar rows; the JSP scraper remains as a fallback.       |
+| `get_homework`          | Stable       | REST assignment grid plus each assignment's full text.           |
+| `get_planning`          | Stable       | REST subject-room grid plus each planning's body.                |
+| `get_planning_detail`   | Stable       | One planning in full, with its files and links.                  |
+| `get_subject_rooms`     | Stable       | Subject rooms and teachers; `activity_id` is the join key.       |
+| `get_exam_schedule`     | Stable       | Dates are the announcement window, not the exam date.            |
+| `get_lesson_detail`     | Stable       | Room, teachers and group for one lesson.                         |
+| `get_day_briefing`      | Stable       | Joins a day's schedule to the plannings that apply to it.        |
+| `get_assessments`       | Stable       | Sammantagen bedömning, including the at-risk flag.               |
+| `get_assessment_detail` | Stable       | Teacher's text, graded work, warning motivation.                 |
+| `get_results`           | Stable       | Says a result was published; the grade is on the assessment.     |
+| `get_open_work`         | Stable       | What is outstanding, independent of week.                        |
+| `get_unreported_absence`| Stable       | Splits absences awaiting a guardian from ones already confirmed. |
+| `get_grades`            | Stable       | Betyg. Near-empty for years that use assessments instead.        |
+| `get_attendance`        | Experimental | Heuristic date/minute extraction.                                |
+| `get_news`              | Experimental | Parses startpage headings + bodies.                              |
+| `get_messages`          | Experimental | Subject/sender/date are heuristic.                               |
+| `dump_page`             | Debug        | Returns raw HTML so parsers can be improved.                     |
 
 Experimental tools return a `note` field when they cannot find structured
 data, with guidance on how to help improve the parser.
@@ -198,7 +208,7 @@ All tools accept no arguments unless noted.
 
 ### Calendar and assignments
 
-- **`get_lunch_menu(week?: int)`** — Lunch menu for the given ISO week
+- **`get_lunch_menu(week?: int, student_id?: int)`** — Lunch menu for the given ISO week
   (current week by default). One entry per weekday with the main dish
   and the vegetarian alternative (`"main | Veg: alt"`).
 - **`get_schedule(week?: int, year?: int, student_id?: int)`** — Lessons
@@ -333,20 +343,35 @@ All tools accept no arguments unless noted.
 
 ### Grades
 
-- **`get_grades()`** — Subject grades for the active child
+- **`get_grades(student_id?: int)`** — Subject grades for the active child
   (Elevdokument → Betyg). Returns one `GradeEntry` per `(subject, term)`
   pair plus the list of `terms` seen. Entries with no grade and no note
   are skipped.
 
 ### Attendance
 
-- **`get_attendance()`** — Per-week attendance summary for the active child
+- **`get_attendance(student_id?: int)`** — Per-week attendance summary for the active child
   (Frånvaro → Rapport). Each `AttendanceWeek` carries total presence
   percentage, unreported/reported absence counts, and sub-categories
   (sen ankomst, föranmäld, etc.).
-- **`get_unreported_absence()`** — Unreported-absence events that typically
-  need a parent's absence report (Frånvaro → Oanmäld frånvaro). Each event
-  has week, weekday, lesson, and a school-side status message.
+- **`get_unreported_absence(student_id?: int)`** — Unreported absence
+  (Frånvaro → Oanmäld frånvaro), split by whether it has been acknowledged.
+
+  SchoolSoft texts a guardian when a lesson is missed and then expects them
+  to open that page and confirm they have seen it. Confirmed rows stay on
+  the page permanently, in a second table with the same columns, so a
+  parser that takes the first table it recognises reports weeks-old,
+  handled absences as outstanding — every day, forever.
+
+  `events` holds only what is still awaiting confirmation. `acknowledged`
+  holds the rest, with who confirmed and when.
+  `confirmed_none_pending` distinguishes "the page said there is nothing"
+  from "we parsed nothing".
+
+  This tool only reads. Confirming an absence is the guardian's own
+  attestation that they saw it, so it is deliberately not automated: a
+  server that ticks it makes the school's record claim a parent took note
+  when nobody did.
 
 ### News, veckobrev, and attachments
 
@@ -356,11 +381,11 @@ All tools accept no arguments unless noted.
   the archived view.
 - **`get_news_item(news_id: int, type_id?: int = 1, student_id?: int)`** —
   Fetch one news item with the full body and attachments.
-- **`download_attachment(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int)`**
+- **`download_attachment(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_bytes?: int = 700_000)`**
   — Download a news or message attachment as base64-encoded bytes. Use
   when you need the raw file (e.g. to save to disk). Otherwise prefer
   `read_attachment_text`, which is far cheaper for LLM context.
-- **`read_attachment_text(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_chars?: int = 50_000)`**
+- **`read_attachment_text(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_chars?: int = 50_000, offset?: int = 0)`**
   — Download an attachment and return its extracted plain text. Supports
   PDF (via `pypdf`), `.docx` (via `python-docx`), and plain-text files.
   The right tool for *"vad står det i veckobrevet?"*.
@@ -374,24 +399,24 @@ a bare 404.
 
 ### School information & contacts
 
-- **`get_school_info()`** — The Skolinformation page rendered as plain
+- **`get_school_info(student_id?: int)`** — The Skolinformation page rendered as plain
   text (school hours, phone numbers, term dates, addresses, …). The
   page is free-form HTML so we don't impose structure — the model
   picks out what's relevant.
-- **`get_contacts()`** — Classmate / guardian contact list for the
+- **`get_contacts(student_id?: int)`** — Classmate / guardian contact list for the
   active child (Skolinfo → Kontaktlistor). Each `Contact` carries
   name, phone (when published) and address. PII-heavy — handle with care.
 
 ### Library
 
-- **`get_library_files()`** — Files shared in the school's library
+- **`get_library_files(student_id?: int)`** — Files shared in the school's library
   (Filer & länkar). Each entry has the display title, clean filename,
   optional description, size, MIME guess, the `request_id` to pass to
   the download endpoint, and the category heading it appeared under.
 
 ### Messages
 
-- **`get_messages()`** — Inbox messages (experimental).
+- **`get_messages(student_id?: int)`** — Inbox messages (experimental).
 
 ### Debugging
 
@@ -410,7 +435,9 @@ a bare 404.
 - The MCP server runs as a local subprocess — no data is sent to any
   third-party server beyond SchoolSoft itself.
 - Tool responses may contain personal information (names, grades,
-  messages). Treat them with the same care as your SchoolSoft account.
+  messages). Treat them with the same care as your SchoolSoft account, and
+  never paste one into a test fixture — see *Fixtures are written by hand*
+  below.
 
 ## Development
 
@@ -424,7 +451,35 @@ pip install -e ".[dev]"
 pytest          # run tests
 ruff check .    # lint
 mypy src        # type-check
+
+scripts/install-hooks.sh          # enable the pre-commit guard
+python scripts/check_pii.py       # or run it by hand
 ```
+
+### Fixtures are written by hand
+
+This repository is public and the system on the other end holds children's
+school records. The mistake that has actually been made here is pasting a
+real API response into a test because it was already on screen, which
+brings a teacher's assignment titles and SchoolSoft's own record ids along
+with the payload shape that was the point.
+
+Copy the shape. Type the values.
+
+`scripts/check_pii.py` enforces what it can and runs in CI and as a
+pre-commit hook: personal numbers, emails, phone numbers, UUIDs, URLs
+naming a specific school, and — the useful one — a reserved id range.
+Every SchoolSoft record id under `tests/` must be in **900000-999999**.
+Real ids are three or four digits, so a pasted payload fails on its own
+ids before anyone reads the text around them.
+
+It also checks a denylist of names, places and the school. That list
+cannot live here, because a list of the operator's children's names is
+exactly the thing not to publish, so it is read from
+`~/.config/schoolsoft-mcp/pii-denylist.txt` or `$PII_DENYLIST_FILE`, one
+term per line. Findings print the matched term's length, never the term,
+so CI logs stay clean. Without the file the other layers still run and the
+script says the name layer is off rather than passing silently.
 
 ### Discovering endpoints with Playwright
 
