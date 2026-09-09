@@ -76,7 +76,10 @@ def test_attendance_empty_returns_note() -> None:
 
 def test_unreported_parses_all_rows(unreported_html: str) -> None:
     u = parse_unreported_absence(unreported_html, school="X")
-    assert u.note is None
+    # Every row on this fixture is still awaiting acknowledgement, so the
+    # note says how many rather than being absent.
+    assert u.note is not None
+    assert "awaiting a guardian" in u.note
     assert len(u.events) == 5
 
 
@@ -100,8 +103,67 @@ def test_unreported_extracts_lesson_and_message(unreported_html: str) -> None:
     assert correction.lesson == "9:20-10:00 MA"
 
 
-def test_unreported_empty_returns_note() -> None:
+
+
+# ---------------------------------------------------------------------------
+# Acknowledgement: SchoolSoft texts a guardian, who must then confirm they
+# saw it. Confirmed rows stay on the page for good.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def acknowledged_html() -> str:
+    return (FIXTURES / "absence_message_acknowledged.html").read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def mixed_html() -> str:
+    return (FIXTURES / "absence_message_mixed.html").read_text(encoding="utf-8")
+
+
+def test_acknowledged_rows_are_not_reported_as_outstanding(
+    acknowledged_html: str,
+) -> None:
+    # The exact live failure: the page says nothing is outstanding, but the
+    # already-confirmed table has the same columns, so a positional parser
+    # reported two weeks-old absences as new every single morning.
+    u = parse_unreported_absence(acknowledged_html, school="X")
+    assert u.events == []
+    assert len(u.acknowledged) == 2
+    assert u.confirmed_none_pending is True
+
+
+def test_who_and_when_are_kept(acknowledged_html: str) -> None:
+    u = parse_unreported_absence(acknowledged_html, school="X")
+    first = u.acknowledged[0]
+    assert first.acknowledged_by == "Alex Andersson"
+    assert first.acknowledged_at == "2026-09-09 7:11"
+    assert first.week == 35
+    assert first.lesson == "13:45-14:20 MA"
+    assert first.school_confirmed == ""
+
+
+def test_a_page_with_both_tables_splits_them(mixed_html: str) -> None:
+    u = parse_unreported_absence(mixed_html, school="X")
+    assert [e.lesson for e in u.events] == ["8:20-9:20 ID"]
+    assert [e.lesson for e in u.acknowledged] == ["13:45-14:20 MA"]
+    assert u.confirmed_none_pending is False
+    assert u.note is not None and "1 unreported absence" in u.note
+
+
+def test_the_message_column_is_not_mistaken_for_acknowledgement(
+    mixed_html: str,
+) -> None:
+    # "SMS skickades 2026-09-10 08:25" also ends in a timestamp; only the
+    # "Tagit del av" column counts as a guardian having confirmed.
+    pending = parse_unreported_absence(mixed_html, school="X").events[0]
+    assert pending.acknowledged_by == ""
+    assert pending.acknowledged_at == ""
+    assert pending.message.startswith("SMS skickades")
+
+
+def test_nothing_parsed_is_distinct_from_nothing_pending() -> None:
     u = parse_unreported_absence("<html><body></body></html>", school="X")
     assert u.events == []
-    assert u.note is not None
-    assert "no unreported" in u.note.lower()
+    assert u.confirmed_none_pending is False
+    assert u.note is not None and "did not state" in u.note
