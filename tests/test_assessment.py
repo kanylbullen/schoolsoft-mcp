@@ -20,7 +20,7 @@ ROWS = [
         "friendlyUpdatedAt": "28 maj 13:28",
         "publishedAt": "2026-05-28T13:28:30",
         "friendlyPublishedAt": "28 maj 13:28",
-        "holisticAssessmentId": 1718,
+        "holisticAssessmentId": 5101,
         "published": True,
         "read": False,
     },
@@ -32,7 +32,7 @@ ROWS = [
         "friendlyUpdatedAt": "1 juni 09:00",
         "publishedAt": "2026-06-01T09:00:00",
         "friendlyPublishedAt": "1 juni 09:00",
-        "holisticAssessmentId": 2001,
+        "holisticAssessmentId": 5102,
         "published": True,
         "read": True,
     },
@@ -40,15 +40,15 @@ ROWS = [
         "title": "Hem- och konsumentkunskap",
         "subTitle": "Ingen bedömning",
         "subjectWarning": False,
-        "holisticAssessmentId": 3003,
+        "holisticAssessmentId": 5103,
         "published": False,
         "read": True,
     },
 ]
 
 OPTIONS = [
-    {"id": "1718", "path": "#/parent/holistic_assessment/1718", "label": "Bild (BL)"},
-    {"id": "2001", "path": "#/parent/holistic_assessment/2001", "label": "Matematik (MA)"},
+    {"id": "5101", "path": "#/parent/holistic_assessment/5101", "label": "Bild (BL)"},
+    {"id": "5102", "path": "#/parent/holistic_assessment/5102", "label": "Matematik (MA)"},
     {"id": "9999", "path": "#/parent/holistic_assessment/9999", "label": "Utan kod"},
 ]
 
@@ -132,9 +132,9 @@ class TestAssessedWork:
     WORK: ClassVar[list[dict[str, object]]] = [
         {
             "gridColumnInfo": {"isReview": True},
-            "id": 422,
-            "activityId": 409,
-            "name": "Kreativ textning med logga",
+            "id": 8803,
+            "activityId": 6003,
+            "name": "Affisch i tuschteknik",
             "type": "Arbete under lektionstid",
             "review": "B",
             "points": "",
@@ -148,7 +148,7 @@ class TestAssessedWork:
         # appears; the results list has no such field.
         out = asm.parse_assessed_work(self.WORK)
         assert out[0]["grade"] == "B"
-        assert out[0]["title"] == "Kreativ textning med logga"
+        assert out[0]["title"] == "Affisch i tuschteknik"
         assert out[0]["comment"] == "Fin komposition."
 
     def test_junk_is_empty(self) -> None:
@@ -158,9 +158,9 @@ class TestAssessedWork:
 class TestResults:
     ROWS: ClassVar[list[dict[str, object]]] = [
         {
-            "assignmentId": 42,
-            "activityId": 184,
-            "title": "Fysikprov",
+            "assignmentId": 8801,
+            "activityId": 6001,
+            "title": "Prov om krafter",
             "subjects": [{"name": "Fysik", "color": "#985de6"}],
             "assignmentType": "Prov",
             "teacher": "Alex Andersson",
@@ -168,8 +168,8 @@ class TestResults:
             "read": True,
         },
         {
-            "assignmentId": 44,
-            "activityId": 99,
+            "assignmentId": 8802,
+            "activityId": 6002,
             "title": "Matteläxa",
             "subjects": [{"name": "Matematik"}],
             "assignmentType": "Läxa",
@@ -181,7 +181,7 @@ class TestResults:
 
     def test_newest_first(self) -> None:
         out = asm.parse_result_rows(self.ROWS)
-        assert [r["title"] for r in out] == ["Matteläxa", "Fysikprov"]
+        assert [r["title"] for r in out] == ["Matteläxa", "Prov om krafter"]
 
     def test_subjects_are_flattened(self) -> None:
         assert asm.parse_result_rows(self.ROWS)[0]["subject"] == "Matematik"
@@ -195,11 +195,11 @@ class TestResults:
 class TestOpenWork:
     ROWS: ClassVar[list[dict[str, object]]] = [
         {
-            "id": 441,
+            "id": 8804,
             "partId": None,
             "entityType": "ASSIGNMENT",
-            "activityId": 334,
-            "title": "Blockkomposition",
+            "activityId": 6004,
+            "title": "Formövning i tre delar",
             "type": "Arbete under lektionstid",
             "endDate": "2026-09-14",
             "endTime": "15:20",
@@ -210,10 +210,10 @@ class TestOpenWork:
             "read": True,
         },
         {
-            "id": 413,
+            "id": 8805,
             "entityType": "ASSIGNMENT",
-            "activityId": 363,
-            "title": "Förhör kap.1",
+            "activityId": 6005,
+            "title": "Förhör kapitel 1",
             "type": "Diagnos",
             "endDate": "2026-09-08",
             "endTime": "12:25",
@@ -233,7 +233,7 @@ class TestOpenWork:
 
     def test_due_order(self) -> None:
         out = asm.parse_open_work(self.ROWS)
-        assert [r["title"] for r in out][:2] == ["Förhör kap.1", "Blockkomposition"]
+        assert [r["title"] for r in out][:2] == ["Förhör kapitel 1", "Formövning i tre delar"]
 
     def test_undated_work_sorts_last_rather_than_first(self) -> None:
         # A None end date sorting first would put "no deadline" at the top of
@@ -252,7 +252,7 @@ class TestHistory:
     def test_earlier_terms_come_out(self) -> None:
         out = asm.parse_history(
             [
-                {"assessmentId": 1718, "current": True, "reportingOccasion": None},
+                {"assessmentId": 5101, "current": True, "reportingOccasion": None},
                 {
                     "assessmentId": 4161,
                     "current": False,
@@ -273,6 +273,6 @@ class TestPaths:
         )
 
     def test_extra_slots_fill_too(self) -> None:
-        assert asm.path_for(asm.ASSESSMENT_WORK, 2, assessment_id=1718) == (
-            "rest-api/parent/holistic_assessment/1718/assessed_assignments"
+        assert asm.path_for(asm.ASSESSMENT_WORK, 2, assessment_id=5101) == (
+            "rest-api/parent/holistic_assessment/5101/assessed_assignments"
         )
