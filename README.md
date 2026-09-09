@@ -229,7 +229,17 @@ All tools accept no arguments unless noted.
   - `week_lines` — the line(s) of `body` naming the requested week, e.g.
     `"v.37 Orientering (samling vid klubbstugan)"`. A term-long planning is
     in force every school day but only one of its lines is about any given
-    week; this is that line. Empty when the body is not organised by week.
+    week; this is that line. Week lines are read from the **untruncated**
+    body, so a December row still comes out under a small `max_body_chars`.
+  - `mentions_weeks` — whether the body is organised by week at all. Empty
+    `week_lines` with `mentions_weeks: true` means the teacher wrote about
+    other weeks but not this one, which is not the same as a plan with no
+    week structure. Do not read `body` as if it described the week you
+    asked for.
+
+  A planning written as a `Vecka | Innehåll` table works the same way: the
+  header is carried onto each row, so a row reading `34-36` answers a
+  question about week 35.
 - **`get_planning_detail(part_id: int, week?: int, student_id?: int, max_body_chars? = 20000)`**
   — One planning in full, with the files and links the teacher attached.
 - **`get_subject_rooms(student_id?: int, include_teachers? = True)`** —
@@ -257,9 +267,20 @@ All tools accept no arguments unless noted.
   missing while the summary still looks correct.
 
   `prepare` is the short list to act on before leaving: lessons needing kit
-  or a different meeting point, exams, and work due. Every entry is derived
-  from fetched data — a preparation-heavy lesson with no published planning
-  says so rather than guessing what to bring.
+  or a different meeting point, and work due today or tomorrow. Every entry
+  is derived from fetched data — a preparation-heavy lesson with no
+  published planning says so rather than guessing what to bring, and a
+  planning that is silent about this particular week says *that* rather
+  than offering some other week's meeting point. Announced exams are not in
+  `prepare`; their dates are the announcement window, not the exam date.
+
+  Bodies are fetched only for the subjects on that day's timetable, so
+  `plannings` holds the day's plannings rather than the whole term's. Use
+  `get_planning` for the full listing.
+
+  A section that fails to load is named in `errors` with its message, and a
+  day that looks empty because the schedule fetch failed says so instead of
+  reporting a holiday.
 
 ### Grades
 

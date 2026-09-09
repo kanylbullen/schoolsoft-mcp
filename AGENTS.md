@@ -20,7 +20,7 @@ This is a **public repository**. Treat every change with that in mind
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest          # 18 tests
+pytest          # 232 tests
 ruff check .    # lint
 mypy src        # strict type-check
 ```
@@ -47,9 +47,11 @@ src/schoolsoft_mcp/
   config.py          # Settings.from_env() with validation
   models.py          # pydantic models returned by tools
   parsers/
+    _fields.py       # shared JSON field accessors + the ISO-date regex
     lunch.py         # STABLE — ported from a working HA integration
-    schedule.py      # EXPERIMENTAL
-    homework.py      # EXPERIMENTAL
+    subjectrooms.py  # STABLE — the REST planning/assignment surface
+    schedule.py      # STABLE (REST rows, JSP fallback)
+    homework.py      # STABLE (REST grid, JSP fallback + subtitle splitter)
     attendance.py    # EXPERIMENTAL
     news.py          # EXPERIMENTAL (news + messages)
 tests/
@@ -59,17 +61,25 @@ tests/
 
 ## Tool status
 
-| Tool             | Status        | Confidence | Owner of next fix              |
-| ---------------- | ------------- | ---------- | ------------------------------ |
-| `get_lunch_menu` | Stable        | High       | Only touch if upstream changes |
-| `get_schedule`   | Experimental  | Low        | Needs real-school HTML sample  |
-| `get_homework`   | Experimental  | Low        | Needs real-school HTML sample  |
-| `get_attendance` | Experimental  | Low        | Needs real-school HTML sample  |
-| `get_news`       | Experimental  | Low        | Needs real-school HTML sample  |
-| `get_planning`   | Stable        | High       | REST; body from planning_parts |
-| `get_day_briefing`| Stable       | High       | Pure join over the tools above |
-| `get_messages`   | Experimental  | Low        | Needs real-school HTML sample  |
-| `dump_page`      | Debug         | n/a        | Stable contract; keep simple   |
+| Tool                  | Status       | Confidence | Owner of next fix                   |
+| --------------------- | ------------ | ---------- | ----------------------------------- |
+| `get_lunch_menu`      | Stable       | High       | Only touch if upstream changes      |
+| `get_schedule`        | Stable       | Medium     | REST rows; JSP fallback still there |
+| `get_homework`        | Stable       | High       | REST grid + assignment view         |
+| `get_planning`        | Stable       | High       | REST; body from planning_parts      |
+| `get_planning_detail` | Stable       | High       | Body, week lines and material       |
+| `get_subject_rooms`   | Stable       | High       | REST; the activity_id join key      |
+| `get_exam_schedule`   | Stable       | Medium     | Dates are the announcement window   |
+| `get_lesson_detail`   | Stable       | Medium     | Room/teachers/group for one lesson  |
+| `get_day_briefing`    | Stable       | High       | Pure join over the tools above      |
+| `get_attendance`      | Experimental | Low        | Needs real-school HTML sample       |
+| `get_news`            | Experimental | Low        | Needs real-school HTML sample       |
+| `get_messages`        | Experimental | Low        | Needs real-school HTML sample       |
+| `dump_page`           | Debug        | n/a        | Stable contract; keep simple        |
+
+The REST surface these sit on is mapped in
+[docs/rest-surface.md](./docs/rest-surface.md), including the paths that
+exist but are deliberately not wrapped.
 
 Experimental tools intentionally return a `note` field when they can't
 find structured data — that's the signal to file an issue with a

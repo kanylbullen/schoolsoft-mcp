@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from schoolsoft_mcp.parsers.homework import (
-    _split_subtitle,
     parse_homework_json,
     parse_planning_json,
+    split_subtitle,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -35,7 +35,7 @@ def planning_json() -> list[dict]:  # type: ignore[type-arg]
 
 def test_split_subtitle_three_parts() -> None:
     """Standard '<dates>, <kind>, <subject>' shape."""
-    assert _split_subtitle(
+    assert split_subtitle(
         "ons 13 maj 00:00 - ons 20 maj 00:00, Diagnos, Moderna språk"
     ) == (
         "ons 13 maj 00:00 - ons 20 maj 00:00",
@@ -46,17 +46,17 @@ def test_split_subtitle_three_parts() -> None:
 
 def test_split_subtitle_handles_commas_in_date_range() -> None:
     """Extra commas in the date region should not eat the kind/subject split."""
-    result = _split_subtitle("ons, tors, Diagnos, Bild")
+    result = split_subtitle("ons, tors, Diagnos, Bild")
     # The last two parts are always kind + subject; everything before joins.
     assert result == ("ons, tors", "Diagnos", "Bild")
 
 
 def test_split_subtitle_two_parts() -> None:
-    assert _split_subtitle("ons 13 maj, Bild") == ("ons 13 maj", "", "Bild")
+    assert split_subtitle("ons 13 maj, Bild") == ("ons 13 maj", "", "Bild")
 
 
 def test_split_subtitle_empty() -> None:
-    assert _split_subtitle("") == ("", "", "")
+    assert split_subtitle("") == ("", "", "")
 
 
 # --- homework JSON parser ---------------------------------------------------

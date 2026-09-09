@@ -23,8 +23,6 @@ the caller's usertype (``parent`` / ``student``):
     ``{title, description, publishDate, subtitle}``. ``description`` is
     the teacher's HTML body. This is the payload everything else exists
     to locate.
-``ps/plannings/<planningId>/planning_parts/tabs``
-    The parts a multi-part planning is split into.
 ``ps/subjectroom/assignments/grid/rows`` / ``ps/assignments/<id>/view``
     Same two-step shape for assignments (läxor, prov, inlämningar).
 ``ps/material/<partId>/file`` and ``.../link``
@@ -43,41 +41,45 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from ..models import (
+    DAY_KEYS,
+    DAY_NAMES_SV,
+    DayLesson,
     ExamEntry,
     ExamSchedule,
+    Lesson,
     MaterialLink,
     PlanningDetail,
+    PlanningPart,
     SubjectRoom,
     SubjectRoomList,
 )
+from ._fields import int_field, iso_date, str_field
+from .homework import split_subtitle
+
+__all__ = ["DAY_KEYS", "DAY_NAMES_SV"]  # re-exported: callers join on these
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Paths. ``{ut}`` is the usertype segment ("parent" or "student").
 # ---------------------------------------------------------------------------
+# Only paths this module actually calls live here. Others exist on the REST
+# surface (``ps/subjectroom/{id}``, ``.../unread_entities``,
+# ``ps/plannings/{id}/view``, ``.../planning_parts/tabs``,
+# ``ps/subjectroom/results/grid/rows``, ``.../table/rows``) but have never
+# been exercised against a live tenant, and a constant that looks tested
+# and is not is worse than no constant. See docs/rest-surface.md.
 ROOMS_ALL = "rest-api/{ut}/ps/subjectroom/all"
-ROOM_ONE = "rest-api/{ut}/ps/subjectroom/{activity_id}"
 ROOM_TEACHERS = "rest-api/{ut}/ps/subjectroom/{activity_id}/teachers"
-ROOM_UNREAD = "rest-api/{ut}/ps/subjectroom/unread_entities"
 
 PLANNING_ROWS = "rest-api/{ut}/ps/subjectroom/plannings/grid/rows"
-PLANNING_ROWS_FOR_ROOM = (
-    "rest-api/{ut}/ps/subjectroom/{activity_id}/plannings/grid/rows"
-)
 PLANNING_PART_VIEW = "rest-api/{ut}/ps/planning_parts/{part_id}/view"
-PLANNING_PART_SECTIONS = "rest-api/{ut}/ps/planning_parts/{part_id}/sections"
-PLANNING_VIEW = "rest-api/{ut}/ps/plannings/{planning_id}/view"
-PLANNING_PART_TABS = "rest-api/{ut}/ps/plannings/{planning_id}/planning_parts/tabs"
 
 ASSIGNMENT_ROWS = "rest-api/{ut}/ps/subjectroom/assignments/grid/rows"
 ASSIGNMENT_VIEW = "rest-api/{ut}/ps/assignments/{assignment_id}/view"
-RESULT_ROWS = "rest-api/{ut}/ps/subjectroom/results/grid/rows"
-TABLE_ROWS = "rest-api/{ut}/ps/subjectroom/table/rows"
 
 MATERIAL_FILES = "rest-api/{ut}/ps/material/{section_id}/file"
 MATERIAL_LINKS = "rest-api/{ut}/ps/material/{section_id}/link"
-MATERIAL_FILE_DOWNLOAD = "rest-api/{ut}/ps/material/{section_id}/file/{file_id}"
 
 EXAM_SCHEDULE = "rest-api/{ut}/calendar/subject_room/exam-schedule"
 LESSON_DETAIL = "rest-api/{ut}/calendar/lessons/{lesson_id}"
@@ -130,12 +132,10 @@ def html_to_text(html: str, *, max_chars: int | None = None) -> str:
     for br in soup.find_all("br"):
         br.replace_with("\n")
 
-    for row in soup.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if not cells:
-            continue
-        text = " | ".join(c.get_text(" ", strip=True) for c in cells)
-        row.replace_with(f"\n{text}\n")
+    for table in soup.find_all("table"):
+        _render_table(table)
+    for row in soup.find_all("tr"):  # stray rows outside any table
+        _render_row(row, week_col=None)
 
     for tag in soup.find_all(["p", "div", "li", "h1", "h2", "h3", "h4", "table"]):
         tag.insert_before("\n")
@@ -144,13 +144,65 @@ def html_to_text(html: str, *, max_chars: int | None = None) -> str:
     return _tidy(soup.get_text(""), max_chars)
 
 
+# A term plan is often a table whose first column is the week: the header
+# says "Vecka" and the rows say a bare "34" or "34-36". Nothing on a row
+# then names a week the way prose does, so the week lookup finds nothing at
+# all unless the header is carried down onto each row.
+_WEEK_HEADER = re.compile(r"^(?:v|ve?cka?|veckor|week)\.?$", re.IGNORECASE)
+_BARE_WEEK = re.compile(r"^\d{1,2}(?:\s*[-\u2013\u2014/]\s*\d{1,2})?$")
+
+
+def _render_table(table: Any) -> None:
+    """Flatten one table to ``" | "`` rows, tagging its week column."""
+    week_col: int | None = None
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"])
+        if not cells:
+            continue
+        if week_col is None:
+            texts = [c.get_text(" ", strip=True) for c in cells]
+            for index, text in enumerate(texts):
+                if _WEEK_HEADER.match(text):
+                    week_col = index
+                    break
+            if week_col is not None:
+                _render_row(row, week_col=None)  # the header itself
+                continue
+        _render_row(row, week_col=week_col)
+
+
+def _render_row(row: Any, *, week_col: int | None) -> None:
+    cells = row.find_all(["td", "th"])
+    if not cells:
+        return
+    texts = [c.get_text(" ", strip=True) for c in cells]
+    if (
+        week_col is not None
+        and week_col < len(texts)
+        and _BARE_WEEK.match(texts[week_col])
+    ):
+        texts[week_col] = f"v.{texts[week_col]}"
+    row.replace_with("\n" + " | ".join(texts) + "\n")
+
+
 def _tidy(text: str, max_chars: int | None) -> str:
     text = text.replace(" ", " ")  # noqa: RUF001 - NBSP is the point
     text = "\n".join(_WS_RUN.sub(" ", line).strip() for line in text.splitlines())
     text = _BLANK_RUN.sub("\n\n", text).strip()
-    if max_chars is not None and len(text) > max_chars:
-        text = text[:max_chars].rstrip() + "…"
-    return text
+    return truncate(text, max_chars)
+
+
+def truncate(text: str, max_chars: int | None) -> str:
+    """Cut ``text`` to ``max_chars``, marking the cut so a reader can see it.
+
+    Anything derived from the text — above all the week lines — must be
+    extracted *before* this runs. A term plan's December row sits several
+    thousand characters in, and cutting first makes it look as though the
+    teacher wrote nothing about December.
+    """
+    if max_chars is None or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -229,25 +281,62 @@ def mentions_any_week(body: str) -> bool:
 # ---------------------------------------------------------------------------
 # Date helpers
 # ---------------------------------------------------------------------------
-_ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+parse_iso_date = iso_date
+"""``"2026-09-14 15:20"`` / ``"2026-09-14"`` -> ``date``. None if unparsable."""
 
 
-def parse_iso_date(raw: str | None) -> dt.date | None:
-    """``"2026-09-14 15:20"`` / ``"2026-09-14"`` -> ``date``. None if unparsable."""
+_SV_MONTHS: dict[str, int] = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "maj": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "okt": 10, "nov": 11, "dec": 12,
+}
+_SHORT_DATE = re.compile(
+    r"\b(\d{1,2})\s+(" + "|".join(_SV_MONTHS) + r")\.?\b", re.IGNORECASE
+)
+
+
+def parse_loose_date(raw: str | None, *, near: dt.date) -> dt.date | None:
+    """ISO dates, plus the ``"10 maj"`` form the news list uses.
+
+    The news parser normalises to a bare day and Swedish month with no
+    year, so an ISO-only parser reads every news item as undatable — and a
+    filter that keeps the undatable keeps the entire feed. The year is the
+    one that puts the date nearest ``near``, since a news list spans a term
+    and straddles new year.
+    """
+    iso = parse_iso_date(raw)
+    if iso is not None:
+        return iso
     if not raw:
         return None
-    m = _ISO_DATE.search(raw)
+    m = _SHORT_DATE.search(raw)
     if not m:
         return None
-    try:
-        return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except ValueError:
-        return None
+    day, month = int(m.group(1)), _SV_MONTHS[m.group(2).lower()]
+    best: dt.date | None = None
+    for year in (near.year - 1, near.year, near.year + 1):
+        try:
+            candidate = dt.date(year, month, day)
+        except ValueError:  # 29 feb in a non-leap year
+            continue
+        if best is None or abs((candidate - near).days) < abs((best - near).days):
+            best = candidate
+    return best
 
 
 def week_bounds(year: int, week: int) -> tuple[dt.date, dt.date]:
-    """Monday and Sunday of an ISO week."""
-    monday = dt.date.fromisocalendar(year, week, 1)
+    """Monday and Sunday of an ISO week.
+
+    Raises ``ValueError`` naming the argument. ``fromisocalendar`` alone
+    says "Invalid week: 54", which reads like a server fault rather than a
+    bad parameter to whoever called the tool.
+    """
+    try:
+        monday = dt.date.fromisocalendar(year, week, 1)
+    except ValueError as err:
+        raise ValueError(
+            f"week must be a valid ISO week for {year} (1-52, or 53 in a long "
+            f"year); got {week}"
+        ) from err
     return monday, monday + dt.timedelta(days=6)
 
 
@@ -269,20 +358,8 @@ def overlaps(
 # ---------------------------------------------------------------------------
 # Payload parsers
 # ---------------------------------------------------------------------------
-def _s(entry: dict[str, Any], key: str) -> str:
-    value = entry.get(key, "")
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _i(entry: dict[str, Any], key: str) -> int | None:
-    value = entry.get(key)
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value)
-    return None
+_s = str_field
+_i = int_field
 
 
 def subject_names(entry: dict[str, Any]) -> str:
@@ -400,16 +477,25 @@ def parse_detail_view(
     """
     if not isinstance(payload, dict):
         return {}
-    body = html_to_text(payload.get("description") or "", max_chars=max_body_chars)
+    # Flatten in full, pull the week lines out of the *whole* text, and only
+    # then truncate. A term plan runs to several pages and the week you asked
+    # about is as likely to be on the last page as the first.
+    full_body = html_to_text(payload.get("description") or "")
     out: dict[str, Any] = {
         "title": _s(payload, "title"),
         "subtitle": _s(payload, "subTitle") or _s(payload, "subtitle"),
         "publish_date": _s(payload, "publishDate") or None,
-        "body": body,
-        "body_html": payload.get("description") or "",
+        "body": truncate(full_body, max_body_chars),
+        "mentions_weeks": mentions_any_week(full_body),
     }
+    out["date_range"], kind, subject = split_subtitle(out["subtitle"])
+    if kind:
+        out["kind"] = kind
+    if subject:
+        out["subject"] = subject
     if week is not None:
-        out["week_lines"] = lines_for_week(body, week)
+        out["week_lines"] = lines_for_week(full_body, week)
+    # The payload's own fields win over anything peeled off the subtitle.
     if _s(payload, "type"):
         out["kind"] = _s(payload, "type")
     if _s(payload, "subjectNames"):
@@ -477,6 +563,7 @@ def parse_planning_detail(
     *,
     row: dict[str, Any] | None = None,
     material: list[MaterialLink] | None = None,
+    note: str | None = None,
 ) -> PlanningDetail:
     row = row or {}
     return PlanningDetail(
@@ -486,7 +573,7 @@ def parse_planning_detail(
         title=view.get("title") or row.get("title", ""),
         subject=view.get("subject") or row.get("subject", ""),
         teacher=row.get("teacher", ""),
-        date_range=view.get("subtitle", ""),
+        date_range=view.get("date_range", ""),
         start_date=row.get("start_date"),
         end_date=row.get("end_date"),
         publish_date=view.get("publish_date") or row.get("publish_date"),
@@ -494,32 +581,15 @@ def parse_planning_detail(
         read=bool(row.get("read")),
         body=view.get("body", ""),
         week_lines=view.get("week_lines") or [],
+        mentions_weeks=bool(view.get("mentions_weeks")),
         material=material or [],
+        note=note,
     )
 
 
 # ---------------------------------------------------------------------------
 # Joining a day's schedule to the plannings that apply to it
 # ---------------------------------------------------------------------------
-DAY_KEYS: tuple[str, ...] = (
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-    "sunday",
-)
-DAY_NAMES_SV: dict[str, str] = {
-    "monday": "måndag",
-    "tuesday": "tisdag",
-    "wednesday": "onsdag",
-    "thursday": "torsdag",
-    "friday": "fredag",
-    "saturday": "lördag",
-    "sunday": "söndag",
-}
-
 # Subjects where the day itself imposes preparation at home.
 #
 # Two kinds of needle, because SchoolSoft names the same lesson three ways
@@ -567,11 +637,10 @@ def prep_label(subject: str, planning_titles: list[str]) -> str | None:
 
 def first_lines(body: str, limit: int = 200) -> str:
     """Opening of a planning body, for plannings with no week-numbered lines."""
-    text = " ".join(line for line in body.splitlines() if line.strip())
-    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+    return truncate(" ".join(line for line in body.splitlines() if line.strip()), limit)
 
 
-def activity_for_lesson(lesson: Any, plannings: list[Any]) -> int:
+def activity_for_lesson(lesson: Lesson, plannings: list[PlanningPart]) -> int:
     """Best-effort ``activity_id`` for a schedule lesson.
 
     The calendar endpoint returns no ``activityId`` on lessons, so the join
@@ -581,10 +650,12 @@ def activity_for_lesson(lesson: Any, plannings: list[Any]) -> int:
     ("Idrott", "Biologi"); the planning carries a third form ("Idrott och
     hälsa").
 
-    Matching is deliberately strict, and prefers the full name:
+    Matching is deliberately strict:
 
-    - The full name wins outright. If it matches nothing, we stop — we do
-      **not** retry with the short code.
+    - An exact subject match is tried for both forms. Equality cannot
+      confuse a code with a longer name, so this is always safe.
+    - Prefix matching is where the code is lossy, so only the full name may
+      try it, and a miss there is final — no retry with the code.
     - A prefix match must be unambiguous across all the child's plannings.
 
     Both rules exist because the short code is dangerously lossy: "BI"
@@ -595,59 +666,71 @@ def activity_for_lesson(lesson: Any, plannings: list[Any]) -> int:
 
     Returns ``-1`` when nothing matches unambiguously.
     """
-    subject = (getattr(lesson, "subject", "") or "").strip().lower()
-    notes = (getattr(lesson, "notes", "") or "").strip().lower()
-    candidates = [c for c in (notes, subject) if c]
-    # The full name, when SchoolSoft gave us one, is the only candidate.
-    if notes and notes != subject:
-        candidates = [notes]
+    subject = (lesson.subject or "").strip().lower()
+    notes = (lesson.notes or "").strip().lower()
 
-    usable = [
-        p for p in plannings
-        if p.activity_id is not None and (p.subject or "").strip()
+    # (activity_id, subject) for the plannings that can be matched at all.
+    usable: list[tuple[int, str]] = [
+        (p.activity_id, name)
+        for p in plannings
+        if p.activity_id is not None and (name := (p.subject or "").strip().lower())
     ]
-    for candidate in candidates:
-        exact = {
-            int(p.activity_id)
-            for p in usable
-            if (p.subject or "").strip().lower() == candidate
-        }
+
+    # An exact hit is safe from either form: "BI" can only equal a planning
+    # whose subject *is* "BI", never "Bild". Both are tried because ``notes``
+    # is free text and often an annotation ("Ombyte", "Diagnos") rather than
+    # the subject's full name, and dropping ``subject`` on that basis loses
+    # the match entirely.
+    for candidate in dict.fromkeys(c for c in (notes, subject) if c):
+        exact = {aid for aid, name in usable if name == candidate}
         if len(exact) == 1:
             return exact.pop()
+
+    # Prefix matching is where the short code is dangerous, so only the full
+    # name is allowed to try it, and a miss there is final.
+    candidate = notes or subject
+    if candidate:
         prefixed = {
-            int(p.activity_id)
-            for p in usable
-            if (target := (p.subject or "").strip().lower())
-            and (target.startswith(candidate) or candidate.startswith(target))
+            aid
+            for aid, name in usable
+            if name.startswith(candidate) or candidate.startswith(name)
         }
         if len(prefixed) == 1:
             return prefixed.pop()
     return -1
 
 
-def day_lessons(lessons: list[Any], plannings: list[Any], day_key: str) -> list[Any]:
+def day_lessons(
+    lessons: list[Lesson], plannings: list[PlanningPart], day_key: str
+) -> list[DayLesson]:
     """The day's lessons in time order, each carrying its planning text."""
-    from ..models import DayLesson
-
-    by_activity: dict[int, list[Any]] = {}
+    by_activity: dict[int, list[PlanningPart]] = {}
     for item in plannings:
         if item.activity_id is not None:
             by_activity.setdefault(item.activity_id, []).append(item)
 
-    out: list[Any] = []
+    out: list[DayLesson] = []
     for lesson in sorted(
         (le for le in lessons if (le.day or "").lower() == day_key),
         key=lambda x: x.start or "",
     ):
         relevant: list[str] = []
         titles: list[str] = []
-        for item in by_activity.get(activity_for_lesson(lesson, plannings), []):
+        activity_id = activity_for_lesson(lesson, plannings)
+        for item in by_activity.get(activity_id, []):
             titles.append(item.title)
             if item.week_lines:
                 relevant.extend(item.week_lines)
-            elif item.body:
-                # A planning with no week-numbered lines still says what the
-                # class is working on; the opening lines are the useful part.
+            elif item.body and not item.mentions_weeks:
+                # A prose planning with no week numbers anywhere still says
+                # what the class is working on; the opening is the useful part.
+                #
+                # A planning that *is* organised by week and has no line for
+                # this one is the opposite: its opening describes some other
+                # week. Attaching it here is how "v.34 samling vid
+                # klubbstugan" ends up presented as today's meeting point in
+                # November. Leave it out and let the caller say that the
+                # planning exists but is silent about this week.
                 relevant.append(first_lines(item.body))
         out.append(
             DayLesson(
@@ -656,6 +739,7 @@ def day_lessons(lessons: list[Any], plannings: list[Any], day_key: str) -> list[
                 subject=lesson.subject,
                 teacher=lesson.teacher,
                 room=lesson.room,
+                activity_id=activity_id if activity_id >= 0 else None,
                 attendance_status=lesson.attendance_status,
                 is_break=lesson.is_break,
                 planning_titles=titles,
@@ -665,7 +749,7 @@ def day_lessons(lessons: list[Any], plannings: list[Any], day_key: str) -> list[
     return out
 
 
-def preparation_notes(lessons: list[Any], *, week: int) -> list[str]:
+def preparation_notes(lessons: list[DayLesson], *, week: int) -> list[str]:
     """The short list a parent acts on: kit, meeting points, missing plannings.
 
     Every entry is derived from fetched data. A preparation-heavy lesson

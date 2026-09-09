@@ -4,7 +4,30 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-WEEKDAYS: tuple[str, ...] = ("monday", "tuesday", "wednesday", "thursday", "friday")
+# ISO order, so ``DAY_KEYS[date.isoweekday() - 1]`` is that date's key.
+DAY_KEYS: tuple[str, ...] = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+# The school week. Derived rather than written out again: the schedule join
+# compares a ``Lesson.day`` built from this against an index into DAY_KEYS,
+# and two hand-maintained tables would only be coincidentally aligned.
+WEEKDAYS: tuple[str, ...] = DAY_KEYS[:5]
+
+DAY_NAMES_SV: dict[str, str] = {
+    "monday": "måndag",
+    "tuesday": "tisdag",
+    "wednesday": "onsdag",
+    "thursday": "torsdag",
+    "friday": "fredag",
+    "saturday": "lördag",
+    "sunday": "söndag",
+}
 
 
 class AsOf(BaseModel):
@@ -185,7 +208,10 @@ class HomeworkItem(BaseModel):
         "text. Empty unless the tool was called with include_body=True.",
     )
     material: list[MaterialLink] = Field(
-        default_factory=list, description="Files and links attached to the assignment."
+        default_factory=list,
+        description="Files and links attached to the assignment. Only "
+        "``get_planning_detail`` fills this in; on a listing it is always "
+        "empty, which means 'not fetched', not 'no attachments'.",
     )
 
 
@@ -254,9 +280,18 @@ class PlanningPart(BaseModel):
         "given week — this is that line. Empty when the body is not organised "
         "by week, in which case read ``body``.",
     )
+    mentions_weeks: bool = Field(
+        default=False,
+        description="True when the body is organised by week number at all. "
+        "With ``week_lines`` empty this means the teacher wrote about other "
+        "weeks but not the one you asked for — do not read ``body`` as if it "
+        "described the requested week.",
+    )
     material: list[MaterialLink] = Field(
         default_factory=list,
-        description="Files and links attached to the planning.",
+        description="Files and links attached to the planning. Only "
+        "``get_planning_detail`` fills this in; on a listing it is always "
+        "empty, which means 'not fetched', not 'no attachments'.",
     )
 
 
@@ -520,8 +555,9 @@ class MaterialLink(BaseModel):
     url: str | None = None
     file_id: int | None = Field(
         default=None,
-        description="Pass to ``download_material_file`` together with the "
-        "planning/assignment ID this material hangs off.",
+        description="SchoolSoft's internal id for the file. There is no tool "
+        "that takes it — fetch the file through ``url`` instead. Present so a "
+        "caller can tell two attachments with the same name apart.",
     )
 
 
@@ -574,6 +610,10 @@ class PlanningDetail(BaseModel):
     week_lines: list[str] = Field(
         default_factory=list,
         description="Lines of ``body`` naming the requested week, when one was given.",
+    )
+    mentions_weeks: bool = Field(
+        default=False,
+        description="True when the body is organised by week number at all.",
     )
     material: list[MaterialLink] = Field(default_factory=list)
     note: str | None = None
@@ -664,9 +704,11 @@ class DayBriefing(BaseModel):
     lessons: list[DayLesson] = Field(default_factory=list)
     prepare: list[str] = Field(
         default_factory=list,
-        description="Preparation-critical items derived from the day: gym kit for "
-        "Idrott, swimming, outings, exams, anything the plannings flag. Each entry "
-        "is a ready-to-read sentence.",
+        description="Preparation-critical items derived from the day: meeting "
+        "points, kit, outings, work due today or tomorrow, anything the "
+        "plannings flag. Each entry is a ready-to-read sentence. Announced "
+        "exams are NOT here — see ``exams``, whose dates are the "
+        "announcement window rather than the exam date.",
     )
     due_today: list[HomeworkItem] = Field(default_factory=list)
     due_soon: list[HomeworkItem] = Field(
@@ -674,12 +716,17 @@ class DayBriefing(BaseModel):
     )
     plannings: list[PlanningDetail] = Field(
         default_factory=list,
-        description="Plannings in force on this date, with bodies and week lines.",
+        description="The plannings behind this day's lessons, with bodies and "
+        "week lines. Subjects not on the timetable today are left out — their "
+        "bodies are not fetched, because a day briefing is about the day. Use "
+        "``get_planning`` for the full term listing.",
     )
     exams: list[ExamEntry] = Field(default_factory=list)
     unreported_absence: list[UnreportedAbsenceEvent] = Field(default_factory=list)
     news: list[NewsItem] = Field(
-        default_factory=list, description="News/veckobrev from the last 14 days."
+        default_factory=list,
+        description="News/veckobrev from the last ``news_days`` days. Items "
+        "with an unreadable date are kept rather than dropped.",
     )
     errors: list[str] = Field(
         default_factory=list,
