@@ -970,5 +970,88 @@ class OpenWorkList(BaseModel):
     as_of: AsOf | None = None
 
 
+class FritidsDay(BaseModel):
+    """One day in the fritids month calendar."""
+
+    date: str = Field(description="ISO date.")
+    weekday: str = Field(default="", description="Lowercase English weekday.")
+    week: int | None = Field(default=None, description="ISO week number.")
+    drop_off: str = Field(default="", description='Lämnas, e.g. "8:00". Empty when unbooked.')
+    pick_up: str = Field(default="", description='Hämtas, e.g. "16:30". Empty when unbooked.')
+    booked: bool = Field(
+        default=False,
+        description="True when the day has a drop-off and pick-up time. A "
+        "weekday with ``booked: false`` inside a fritids child's term is a "
+        "day nobody has arranged care for — worth saying out loud.",
+    )
+    in_month: bool = Field(
+        default=True,
+        description="False for the leading/trailing days of adjacent months "
+        "that the calendar shows to fill its first and last rows.",
+    )
+
+
+class FritidsWeekDay(BaseModel):
+    """One weekday in the detailed week block, with the school day beside it."""
+
+    date: str = ""
+    weekday: str = ""
+    drop_off: str = ""
+    pick_up: str = ""
+    school_start: str = Field(default="", description="When lessons start that day.")
+    school_end: str = Field(
+        default="",
+        description="When lessons end. The gap to ``pick_up`` is fritids time.",
+    )
+    guardian_comment: str = Field(
+        default="", description="Comment the guardian left for the staff."
+    )
+    staff_comment: str = Field(
+        default="", description="Comment the staff left for the guardian."
+    )
+    editable: bool = Field(
+        default=False,
+        description="True for days still to come — the page offers to change "
+        "them. This tool does not; it only reads.",
+    )
+
+
+class FritidsTimes(BaseModel):
+    """Fritids (after-school care) times for one child, one month at a time.
+
+    The only page on the parent surface that changes what a family does
+    every single day for a younger child: when the child is dropped off and
+    when somebody must be at the school to collect them.
+    """
+
+    school: str
+    student_id: int | None = None
+    year: int = 0
+    month: int = Field(default=0, description="1-12.")
+    month_label: str = Field(default="", description='As the page prints it, e.g. "september 2026".')
+    days: list[FritidsDay] = Field(default_factory=list)
+    week: int | None = Field(default=None, description="ISO week the detail block shows.")
+    week_days: list[FritidsWeekDay] = Field(
+        default_factory=list,
+        description="The detailed week: booked times next to school hours, "
+        "and comments in both directions.",
+    )
+    recurring_weeks: str = Field(
+        default="",
+        description='The weeks the booked times repeat over, e.g. "37-51, 17-22".',
+    )
+    opening_hours: str = Field(
+        default="", description="Fritids opening hours, when the school states them."
+    )
+    has_fritids: bool = Field(
+        default=False,
+        description="False when no day in the month has a booked time — the "
+        "child is not enrolled, or nothing is booked. Do not read an empty "
+        "``days[].pick_up`` as 'goes home after school' without checking this.",
+    )
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
 HomeworkItem.model_rebuild()
 PlanningPart.model_rebuild()

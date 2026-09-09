@@ -29,6 +29,7 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_results`           | Stable       | Says a result was published; the grade is on the assessment.     |
 | `get_open_work`         | Stable       | What is outstanding, independent of week.                        |
 | `get_unreported_absence`| Stable       | Splits absences awaiting a guardian from ones already confirmed. |
+| `get_fritids_times`     | Stable       | After-school care: drop-off and pick-up per day, school hours beside them. |
 | `get_grades`            | Stable       | Betyg. Near-empty for years that use assessments instead.        |
 | `get_attendance`        | Experimental | Heuristic date/minute extraction.                                |
 | `get_news`              | Experimental | Parses startpage headings + bodies.                              |
@@ -340,6 +341,25 @@ All tools accept no arguments unless noted.
   for work with a deadline; term-long plannings otherwise appear with an end
   date in December. Expired work is hidden unless `include_expired` is set,
   and the `note` says how much was hidden.
+
+### Fritids (after-school care)
+
+- **`get_fritids_times(student_id?: int, year?: int, month?: int)`** — The
+  care times booked for a child ("Mina tider"): the month's calendar with
+  drop-off and pick-up per day, and the detailed week with school hours
+  beside the booked times and any comments between home and staff.
+
+  This is the page that decides when somebody has to be at the school to
+  collect a younger child, and it only exists in the menu for children
+  enrolled in fritids — which is why nothing else knew about it.
+
+  `has_fritids` is false when no day carries a time. Check it before
+  reading an empty `pick_up` as "goes home after school": for a child who
+  is not enrolled every day is empty and means nothing. A weekday inside
+  the term with `booked: false` is a day nobody has arranged care for.
+
+  Defaults to the current month; pass `year` and `month` (1-12) for
+  another. Read only — the page can change times, this tool never does.
 
 ### Grades
 
