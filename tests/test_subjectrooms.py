@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from schoolsoft_mcp.models import Lesson, PlanningPart
 from schoolsoft_mcp.parsers import subjectrooms as sr
 
 # The real Idrott planning that motivated this module: a term-long planning
@@ -35,7 +36,10 @@ class TestHtmlToText:
         )
         lines = sr.html_to_text(html).splitlines()
         assert "Vecka | Område" in lines
-        assert "34-36 | Bienvenue" in lines
+        # The header's "Vecka" is carried onto the row, because nothing on a
+        # data row names a week the way prose does and the week lookup would
+        # otherwise never match a table-formatted term plan.
+        assert "v.34-36 | Bienvenue" in lines
 
     def test_link_targets_are_kept(self) -> None:
         html = '<p>Uttal: <a href="https://youtu.be/x">klippet</a></p>'
@@ -275,34 +279,35 @@ class TestPaths:
         assert sr.path(sr.ROOMS_ALL, 1) == "rest-api/student/ps/subjectroom/all"
 
 
-class _FakeLesson:
-    """Minimal stand-in for models.Lesson (only the fields the join reads)."""
+def _FakeLesson(
+    day: str = "monday",
+    start: str = "08:20",
+    end: str = "09:20",
+    subject: str = "",
+    notes: str = "",
+    room: str = "",
+    teacher: str = "",
+    is_break: bool = False,
+) -> Lesson:
+    """A real ``Lesson`` with the fields the join reads.
 
-    def __init__(
-        self,
-        day: str = "monday",
-        start: str = "08:20",
-        end: str = "09:20",
-        subject: str = "",
-        notes: str = "",
-        room: str = "",
-        teacher: str = "",
-        is_break: bool = False,
-    ) -> None:
-        self.day = day
-        self.start = start
-        self.end = end
-        self.subject = subject
-        self.notes = notes
-        self.room = room
-        self.teacher = teacher
-        self.is_break = is_break
-        self.attendance_status = ""
+    Deliberately not a duck-typed stand-in: the join reads these attributes
+    off the model the server actually passes it, and a hand-rolled double
+    would keep passing after the model changed underneath it.
+    """
+    return Lesson(
+        day=day,
+        start=start,
+        end=end,
+        subject=subject,
+        notes=notes,
+        room=room,
+        teacher=teacher,
+        is_break=is_break,
+    )
 
 
-def _planning(**kw: object) -> object:
-    from schoolsoft_mcp.models import PlanningPart
-
+def _planning(**kw: object) -> PlanningPart:
     return PlanningPart(**kw)  # type: ignore[arg-type]
 
 
@@ -397,7 +402,8 @@ class TestPreparationNotes:
             title="Idrott och hälsa HT",
             subject="Idrott och hälsa",
             activity_id=379,
-            body="",
+            body="v.34 Friidrott (samling vid klubbstugan)\nv.35 Innebandy",
+            mentions_weeks=True,
         )
         lessons = sr.day_lessons(
             [_FakeLesson(subject="ID")], [idrott_other_week], "monday"
@@ -480,3 +486,231 @@ class TestActivityJoinPrecision:
         sprakval = _planning(title="Franska", subject="Språkval", activity_id=363, body="q")
         lesson = _FakeLesson(subject="Sp", notes="Spanska")
         assert sr.activity_for_lesson(lesson, [sprakval]) == -1
+
+
+class TestWeekLinesSurviveTruncation:
+    """The week you asked about is as likely to be on page four as page one."""
+
+    def _term_plan(self, weeks: range, target: int) -> str:
+        rows = "".join(
+            f"<p>v.{w} {'Orientering, samling vid klubbstugan' if w == target else 'Innebandy i hallen'}</p>"
+            for w in weeks
+        )
+        return f"<div>{rows}</div>"
+
+    def test_late_week_survives_a_small_body_limit(self) -> None:
+        html = self._term_plan(range(34, 52), target=50)
+        out = sr.parse_detail_view(
+            {"title": "Idrott HT", "description": html},
+            week=50,
+            max_body_chars=200,
+        )
+        # The body is cut, and the marker says so...
+        assert out["body"].endswith("…")
+        assert "v.50" not in out["body"]
+        # ...but the line for the requested week came out of the full text.
+        assert out["week_lines"] == ["v.50 Orientering, samling vid klubbstugan"]
+
+    def test_body_is_still_truncated_to_the_limit(self) -> None:
+        out = sr.parse_detail_view(
+            {"description": self._term_plan(range(34, 52), target=50)},
+            week=50,
+            max_body_chars=200,
+        )
+        assert len(out["body"]) <= 201  # 200 plus the ellipsis
+
+    def test_mentions_weeks_is_computed_on_the_full_text(self) -> None:
+        out = sr.parse_detail_view(
+            {"description": self._term_plan(range(34, 52), target=50)},
+            week=12,
+            max_body_chars=50,
+        )
+        assert out["mentions_weeks"] is True
+        assert out["week_lines"] == []
+
+
+class TestTableTermPlans:
+    """A term plan written as a table must still answer "what about v.36?"."""
+
+    HTML = (
+        "<table><tbody>"
+        "<tr><th>Vecka</th><th>Innehåll</th></tr>"
+        "<tr><td>34-36</td><td>Bienvenue</td></tr>"
+        "<tr><td>37</td><td>Terränglöpning, samling vid spårcentralen 8:20</td></tr>"
+        "</tbody></table>"
+    )
+
+    def test_week_lines_come_out_of_a_table(self) -> None:
+        body = sr.html_to_text(self.HTML)
+        assert sr.lines_for_week(body, 37) == [
+            "v.37 | Terränglöpning, samling vid spårcentralen 8:20"
+        ]
+
+    def test_a_row_range_covers_every_week_in_it(self) -> None:
+        body = sr.html_to_text(self.HTML)
+        assert sr.lines_for_week(body, 35) == ["v.34-36 | Bienvenue"]
+
+    def test_a_table_without_a_week_header_is_left_alone(self) -> None:
+        html = (
+            "<table><tbody>"
+            "<tr><th>Moment</th><th>Betyg</th></tr>"
+            "<tr><td>34</td><td>C</td></tr>"
+            "</tbody></table>"
+        )
+        assert "v.34" not in sr.html_to_text(html)
+
+
+class TestWeekOrganisedBodyIsNotReusedForOtherWeeks:
+    """The opening of a week-by-week plan describes *some other* week."""
+
+    TERM_PLAN = _planning(
+        title="Idrott och hälsa HT",
+        subject="Idrott och hälsa",
+        activity_id=379,
+        body="v.34 Friidrott (samling vid klubbstugan)\nv.35 Innebandy",
+        mentions_weeks=True,
+    )
+
+    def test_no_body_fallback_when_the_plan_is_organised_by_week(self) -> None:
+        out = sr.day_lessons([_FakeLesson(subject="ID")], [self.TERM_PLAN], "monday")
+        assert out[0].plannings == []
+        assert out[0].planning_titles == ["Idrott och hälsa HT"]
+
+    def test_another_weeks_meeting_point_never_reaches_prepare(self) -> None:
+        lessons = sr.day_lessons([_FakeLesson(subject="ID")], [self.TERM_PLAN], "monday")
+        notes = sr.preparation_notes(lessons, week=45)
+        assert "klubbstugan" not in notes[0]
+        assert "inget står om v.45" in notes[0]
+
+    def test_prose_plannings_still_fall_back_to_the_body(self) -> None:
+        prose = _planning(
+            title="Slöjd",
+            subject="Slöjd",
+            activity_id=345,
+            body="Ni gör en skrivbordsförvaring.",
+            mentions_weeks=False,
+        )
+        out = sr.day_lessons([_FakeLesson(subject="Slöjd")], [prose], "monday")
+        assert out[0].plannings == ["Ni gör en skrivbordsförvaring."]
+
+
+class TestJoinWithAnnotatedNotes:
+    """``notes`` is free text: often the subject's name, often an annotation."""
+
+    def test_an_annotation_does_not_block_an_exact_subject_match(self) -> None:
+        # "Ombyte" is not a subject; the row's own subject is exact.
+        lesson = _FakeLesson(subject="Idrott och hälsa", notes="Ombyte")
+        assert sr.activity_for_lesson(lesson, [IDROTT_PLANNING]) == 379
+
+    def test_an_annotation_still_cannot_license_a_prefix_match(self) -> None:
+        # Prefix matching is where the short code is dangerous, so a lesson
+        # whose only full-name candidate is an annotation stays unmatched
+        # rather than falling back to "BI" and picking up "Bild".
+        bild = _planning(title="Terminsplanering", subject="Bild", activity_id=334)
+        lesson = _FakeLesson(subject="BI", notes="Diagnos")
+        assert sr.activity_for_lesson(lesson, [bild]) == -1
+
+    def test_the_matched_activity_id_is_reported_on_the_lesson(self) -> None:
+        out = sr.day_lessons([_FakeLesson(subject="ID")], [IDROTT_PLANNING], "monday")
+        assert out[0].activity_id == 379
+
+    def test_an_unmatched_lesson_reports_no_activity_id(self) -> None:
+        out = sr.day_lessons([_FakeLesson(subject="MA")], [IDROTT_PLANNING], "monday")
+        assert out[0].activity_id is None
+
+
+class TestLooseDates:
+    """News dates are "10 maj", so an ISO-only parser filters nothing."""
+
+    NEAR = dt.date(2026, 9, 9)
+
+    def test_iso_dates_still_parse(self) -> None:
+        assert sr.parse_loose_date("2026-05-10", near=self.NEAR) == dt.date(2026, 5, 10)
+
+    def test_short_swedish_dates_parse(self) -> None:
+        assert sr.parse_loose_date("10 maj", near=self.NEAR) == dt.date(2026, 5, 10)
+
+    def test_the_year_chosen_is_the_nearest_one(self) -> None:
+        # A December item read in January belongs to the year just gone.
+        assert sr.parse_loose_date("20 dec", near=dt.date(2027, 1, 8)) == dt.date(
+            2026, 12, 20
+        )
+
+    def test_junk_is_still_none(self) -> None:
+        assert sr.parse_loose_date("i förrgår", near=self.NEAR) is None
+        assert sr.parse_loose_date(None, near=self.NEAR) is None
+
+
+class TestSubtitleIsSplitNotAliased:
+    """``date_range`` is the date part, not a second copy of the subtitle."""
+
+    def test_date_range_excludes_the_kind_and_subject(self) -> None:
+        out = sr.parse_detail_view(
+            {
+                "title": "Terminsplanering",
+                "subTitle": "tors 08 jan. - tors 18 juni Planering, Bild",
+                "description": "<p>x</p>",
+            }
+        )
+        assert out["subtitle"] == "tors 08 jan. - tors 18 juni Planering, Bild"
+        assert out["date_range"] == "tors 08 jan. - tors 18 juni"
+        assert out["kind"] == "Planering"
+        assert out["subject"] == "Bild"
+
+    def test_the_payloads_own_fields_win(self) -> None:
+        out = sr.parse_detail_view(
+            {
+                "subTitle": "ons 13 maj, Bild",
+                "type": "Diagnos",
+                "subjectNames": "Biologi",
+                "description": "",
+            }
+        )
+        assert out["kind"] == "Diagnos"
+        assert out["subject"] == "Biologi"
+        assert out["date_range"] == "ons 13 maj"
+
+
+class TestWeekBoundsValidation:
+    def test_a_real_week_resolves(self) -> None:
+        first, last = sr.week_bounds(2026, 37)
+        assert first == dt.date(2026, 9, 7)
+        assert last == dt.date(2026, 9, 13)
+
+    def test_an_impossible_week_names_the_argument(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="week must be a valid ISO week"):
+            sr.week_bounds(2026, 54)
+
+
+class TestSharedFieldAccessors:
+    """One implementation, so the same payload parses the same everywhere."""
+
+    def test_every_parser_uses_the_same_int_rule(self) -> None:
+        from schoolsoft_mcp.parsers import homework, schedule
+        from schoolsoft_mcp.parsers._fields import int_field
+
+        entry = {"a": "-5", "b": True, "c": "12", "d": 7, "e": "x"}
+        for key in entry:
+            expected = int_field(entry, key)
+            assert homework._int_field(entry, key) == expected
+            assert schedule._int_field(entry, key) == expected
+            assert sr._i(entry, key) == expected
+
+    def test_a_bool_is_not_an_int(self) -> None:
+        from schoolsoft_mcp.parsers._fields import int_field
+
+        assert int_field({"x": True}, "x") is None
+
+    def test_the_iso_regex_still_captures_the_whole_date(self) -> None:
+        # Several call sites read .group(1); a regex capturing the parts
+        # separately would hand them the year instead.
+        from schoolsoft_mcp.parsers._fields import ISO_DATE_RE
+
+        assert ISO_DATE_RE.search("klart 2026-09-14 15:20").group(1) == "2026-09-14"
+
+    def test_a_five_digit_year_is_not_a_date(self) -> None:
+        from schoolsoft_mcp.parsers._fields import iso_date
+
+        assert iso_date("12026-09-14") is None

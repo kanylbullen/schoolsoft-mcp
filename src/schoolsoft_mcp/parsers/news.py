@@ -48,6 +48,7 @@ from urllib.parse import parse_qs, urlparse
 from bs4 import BeautifulSoup, Tag
 
 from ..models import Attachment, Message, MessageList, NewsFeed, NewsItem
+from ._fields import ISO_DATE_RE
 from .attachments import guess_content_type
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ MESSAGES_PATHS = (
     "jsp/student/right_student_message_list.jsp",
 )
 
-_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_DATE_RE = ISO_DATE_RE
 _SHORT_DATE_RE = re.compile(
     r"\b(\d{1,2})\s+(jan|feb|mar|apr|maj|jun|jul|aug|sep|okt|nov|dec)\.?\b",
     re.IGNORECASE,

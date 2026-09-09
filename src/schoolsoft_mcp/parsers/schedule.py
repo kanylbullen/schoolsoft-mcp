@@ -27,6 +27,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from ..models import WEEKDAYS, AllDayEvent, Lesson, ScheduleWeek
+from ._fields import int_field, str_field
 
 logger = logging.getLogger(__name__)
 
@@ -182,20 +183,8 @@ def _iso_date_field(entry: dict[str, Any], key: str) -> str:
     return ""
 
 
-def _str_field(entry: dict[str, Any], key: str) -> str:
-    value = entry.get(key, "")
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _int_field(entry: dict[str, Any], key: str) -> int | None:
-    value = entry.get(key)
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
+_str_field = str_field
+_int_field = int_field
 
 
 # ----------------------------------------------------------------------------

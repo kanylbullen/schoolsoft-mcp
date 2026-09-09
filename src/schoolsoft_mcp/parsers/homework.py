@@ -19,12 +19,12 @@ a fallback for installations that haven't migrated.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
 from ..models import HomeworkItem, HomeworkList, PlanningList, PlanningPart
+from ._fields import ISO_DATE_RE, int_field, iso_date_str, str_field
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ HOMEWORK_PATHS = (
 HOMEWORK_REST_PATH = "rest-api/parent/ps/assignments/start-page"
 PLANNING_REST_PATH = "rest-api/parent/ps/planning_parts/start-page"
 
-_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_DATE_RE = ISO_DATE_RE
 
 
 def parse_homework_json(
@@ -52,7 +52,7 @@ def parse_homework_json(
             if not isinstance(entry, dict):
                 continue
             subtitle = _str_field(entry, "subTitle")
-            date_range, kind, subject = _split_subtitle(subtitle)
+            date_range, kind, subject = split_subtitle(subtitle)
             items.append(
                 HomeworkItem(
                     title=_str_field(entry, "title"),
@@ -95,7 +95,7 @@ def parse_planning_json(
             if not isinstance(entry, dict):
                 continue
             subtitle = _str_field(entry, "subTitle")
-            date_range, kind, subject = _split_subtitle(subtitle)
+            date_range, kind, subject = split_subtitle(subtitle)
             items.append(
                 PlanningPart(
                     title=_str_field(entry, "title"),
@@ -133,7 +133,7 @@ _KNOWN_KINDS = (
 )
 
 
-def _split_subtitle(subtitle: str) -> tuple[str, str, str]:
+def split_subtitle(subtitle: str) -> tuple[str, str, str]:
     """Split a subtitle into (date_range, kind, subject).
 
     Two observed shapes:
@@ -165,26 +165,13 @@ def _split_subtitle(subtitle: str) -> tuple[str, str, str]:
     return parts[0], "", ""
 
 
-def _str_field(entry: dict[str, Any], key: str) -> str:
-    value = entry.get(key, "")
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _int_field(entry: dict[str, Any], key: str) -> int | None:
-    value = entry.get(key)
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
+_str_field = str_field
+_int_field = int_field
 
 
 def _iso_date(raw: str) -> str | None:
     """``"2026-05-20 00:00"`` → ``"2026-05-20"``. None on parse failure."""
-    if not raw:
-        return None
-    m = _DATE_RE.search(raw)
-    return m.group(1) if m else None
+    return iso_date_str(raw) or None
 
 
 def _empty_note(kind: str) -> str:
