@@ -36,6 +36,9 @@ from .models import (
     DayBriefing,
     DayLesson,
     ExamSchedule,
+    FritidsDay,
+    FritidsTimes,
+    FritidsWeekDay,
     GradeList,
     HomeworkItem,
     HomeworkList,
@@ -59,6 +62,7 @@ from .models import (
     UnreportedAbsenceList,
 )
 from .parsers import assessment as asm
+from .parsers import fritids as fr
 from .parsers import subjectrooms as sr
 from .parsers.attachments import (
     build_download_path,
@@ -1878,6 +1882,64 @@ async def get_open_work(
             student_id=student_id,
             items=items,
             note=note,
+        )
+    )
+
+
+@mcp.tool()
+async def get_fritids_times(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+    year: int | None = None,
+    month: int | None = None,
+) -> FritidsTimes:
+    """Return the fritids (after-school care) times booked for a child.
+
+    Maps to "Mina tider". This is the page that decides when somebody has
+    to be at the school to collect a younger child, and it only exists in
+    the menu for children enrolled in fritids — which is why no other tool
+    knew about it.
+
+    Returns the month's calendar (``days``, one per day, with drop-off and
+    pick-up when booked) and the detailed week block (``week_days``, with
+    the school day beside the booked times and any comments between home
+    and staff). Defaults to the current month; pass ``year`` and ``month``
+    (1-12) for another.
+
+    ``has_fritids`` is false when no day carries a time. Check it before
+    reading an empty ``pick_up`` as "goes home after school": for a child
+    not enrolled, every day is empty and means nothing.
+
+    Read only. The page can change times; this tool never does — booking a
+    child's care hours is the guardian's act.
+    """
+    app = _app(ctx)
+    if (year is None) != (month is None):
+        raise ValueError("Pass both year and month, or neither for the current month.")
+    params = (
+        fr.month_query(year, month, student_id)
+        if year is not None and month is not None
+        else ({"requestid": str(student_id)} if student_id is not None else None)
+    )
+    async with app.lock:
+        await _select_child(app, student_id)
+        html = await app.client.fetch_html(fr.FRITIDS_PATH, params=params)
+
+    parsed = fr.parse_fritids(html, school=app.settings.school)
+    return _stamp(
+        FritidsTimes(
+            school=parsed["school"],
+            student_id=student_id,
+            year=parsed["year"],
+            month=parsed["month"],
+            month_label=parsed["month_label"],
+            days=[FritidsDay(**d) for d in parsed["days"]],
+            week=parsed["week"],
+            week_days=[FritidsWeekDay(**d) for d in parsed["week_days"]],
+            recurring_weeks=parsed["recurring_weeks"],
+            opening_hours=parsed["opening_hours"],
+            has_fritids=parsed["has_fritids"],
+            note=parsed["note"],
         )
     )
 
