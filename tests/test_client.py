@@ -362,3 +362,31 @@ async def test_persistent_403_raises_access_error(client: SchoolSoftClient) -> N
     with pytest.raises(SchoolSoftAccessError):
         await client.fetch_bytes("jsp/student/right_student_file_download.jsp")
     await client.close()
+
+
+@respx.mock
+async def test_fetch_bytes_raises_on_the_not_allowed_redirect(
+    client: SchoolSoftClient,
+) -> None:
+    """A refused file download is a 302 to student_not_allowed.jsp, not a 4xx.
+
+    Following it yields a 200 HTML page saying "Du är inte behörig" — which
+    is what read_attachment_text handed to the model on 2026-09-20.
+    """
+    respx.post(f"{BASE}/yourschool/jsp/Login.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "/yourschool/jsp/start.jsp"})
+    )
+    respx.get(f"{BASE}/yourschool/jsp/start.jsp").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    respx.get(f"{BASE}/yourschool/jsp/student/right_student_file_download.jsp").mock(
+        return_value=httpx.Response(302, headers={"Location": "student_not_allowed.jsp"})
+    )
+    not_allowed = respx.get(f"{BASE}/yourschool/jsp/student/student_not_allowed.jsp").mock(
+        return_value=httpx.Response(200, text="Du är inte behörig")
+    )
+
+    with pytest.raises(SchoolSoftAccessError):
+        await client.fetch_bytes("jsp/student/right_student_file_download.jsp")
+    assert not not_allowed.called
+    await client.close()

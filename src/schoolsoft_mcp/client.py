@@ -279,6 +279,15 @@ class SchoolSoftClient:
                 location = resp.headers.get("Location", "")
                 if not location:
                     break
+                if _is_not_allowed_redirect(location):
+                    # The JSP's way of saying "not yours": a 302 to a page
+                    # that renders "Du är inte behörig" with status 200.
+                    # Following it would hand the caller HTML as the file.
+                    raise SchoolSoftAccessError(
+                        f"SchoolSoft redirected {path} to {location} — the session "
+                        "is not entitled to this resource (on a parent account: "
+                        "another child is selected)."
+                    )
                 url = _resolve_redirect(location, url)
                 current_params = None  # query is now in the new Location
                 continue
@@ -388,6 +397,11 @@ class SchoolSoftClient:
 def _looks_like_login_failure(location: str) -> bool:
     lowered = location.lower()
     return "login" in lowered or "error" in lowered
+
+
+def _is_not_allowed_redirect(location: str) -> bool:
+    """``student_not_allowed.jsp`` is where a refused file download lands."""
+    return "not_allowed" in location.lower()
 
 
 def _is_login_redirect(resp: httpx.Response) -> bool:
