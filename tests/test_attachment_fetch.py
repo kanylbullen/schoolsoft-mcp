@@ -285,3 +285,73 @@ async def test_a_failed_priming_request_does_not_abort_the_retries(
     assert content == b"%PDF-1.4 stub"
     assert note is None
     await app.client.close()
+
+
+_REFUSAL_HTML = (
+    '<html><body><div role="alert" class="alert alert-error">'
+    '<h2 class="formheader">Varning</h2><div><div class="message-text">'
+    "Du är inte behörig att se den begärda sidan.</div></div></div></body></html>"
+).encode("iso-8859-1")
+_REFUSAL_HEADERS = {"content-type": "text/html;charset=ISO-8859-1"}
+
+
+@respx.mock
+async def test_html_refusal_page_is_not_returned_as_the_file(app: AppContext) -> None:
+    """Wrong child selected: SchoolSoft answers 200 + HTML, not 404 (seen 2026-09-20)."""
+    _mock_login()
+    news = respx.get(NEWS_URL).mock(return_value=httpx.Response(200, text="<html/>"))
+    respx.get(DOWNLOAD_URL).mock(
+        return_value=httpx.Response(200, content=_REFUSAL_HTML, headers=_REFUSAL_HEADERS)
+    )
+
+    content, headers, note = await _fetch_attachment(
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
+    )
+
+    assert content == b""
+    assert headers == {}
+    assert note is not None
+    assert "inte behörig" in note
+    assert "student_id" in note
+    assert news.called  # the priming retry ran before giving up
+    await app.client.close()
+
+
+@respx.mock
+async def test_html_refusal_recovers_when_the_retry_succeeds(app: AppContext) -> None:
+    _mock_login()
+    respx.get(NEWS_URL).mock(return_value=httpx.Response(200, text="<html/>"))
+    download = respx.get(DOWNLOAD_URL)
+    download.side_effect = [
+        httpx.Response(200, content=_REFUSAL_HTML, headers=_REFUSAL_HEADERS),
+        httpx.Response(
+            200, content=b"%PDF-1.4 stub", headers={"content-type": "application/pdf"}
+        ),
+    ]
+
+    content, _headers, note = await _fetch_attachment(
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
+    )
+
+    assert content == b"%PDF-1.4 stub"
+    assert note is None
+    assert download.call_count == 2
+    await app.client.close()
+
+
+@respx.mock
+async def test_a_genuine_html_attachment_still_comes_through(app: AppContext) -> None:
+    """Only the refusal wording is special; other HTML is a legitimate file."""
+    _mock_login()
+    body = b"<html><body><p>Veckobrev v.39</p></body></html>"
+    respx.get(DOWNLOAD_URL).mock(
+        return_value=httpx.Response(200, content=body, headers=_REFUSAL_HEADERS)
+    )
+
+    content, _headers, note = await _fetch_attachment(
+        app, news_id=900035, fileid=11955, type_id=1, object_kind="news"
+    )
+
+    assert content == body
+    assert note is None
+    await app.client.close()

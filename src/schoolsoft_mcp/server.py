@@ -278,6 +278,45 @@ async def _resolve_org_id(app: AppContext, student_id: int) -> int:
     )
 
 
+# What SchoolSoft's JSP says when the session is valid but the file belongs
+# to a child other than the selected one. It is a 200 with an HTML alert,
+# not a 4xx, so the status-based detection in the client never sees it.
+_ATTACHMENT_REFUSAL_MARKERS = ("inte behörig", "not authorized")
+
+
+def _attachment_refusal(content: bytes, headers: dict[str, str]) -> str | None:
+    """Return the refusal text if ``content`` is SchoolSoft's "not entitled" page.
+
+    Observed 2026-09-20: asking for a news attachment while a sibling was
+    the selected child answered ``200 text/html`` with *"Du är inte behörig
+    att se den begärda sidan"*. Handed on as a text attachment, that page
+    became 14 kB of navigation HTML in the model's context and the real
+    cause — wrong ``student_id`` — was never said out loud.
+    """
+    content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "text/html":
+        return None
+    head = content[:65_536].decode("latin-1", errors="replace").lower()
+    if not any(marker in head for marker in _ATTACHMENT_REFUSAL_MARKERS):
+        return None
+    return (
+        'SchoolSoft answered with its "Du är inte behörig att se den begärda '
+        'sidan" page instead of the file — the session is not entitled to it, '
+        "which on a parent account means another child is selected"
+    )
+
+
+async def _download_attachment_bytes(
+    app: AppContext, path: str, params: dict[str, str]
+) -> tuple[bytes, dict[str, str]]:
+    """``fetch_bytes`` that treats the JSP's HTML refusal page as an access error."""
+    content, headers = await app.client.fetch_bytes(path, params=params)
+    refusal = _attachment_refusal(content, headers)
+    if refusal is not None:
+        raise SchoolSoftAccessError(refusal)
+    return content, headers
+
+
 async def _fetch_attachment(
     app: AppContext,
     *,
@@ -295,7 +334,7 @@ async def _fetch_attachment(
         parent_id=news_id, type_id=type_id, fileid=fileid, object_kind=object_kind
     )
     try:
-        content, headers = await app.client.fetch_bytes(path, params=params)
+        content, headers = await _download_attachment_bytes(app, path, params)
         return content, headers, None
     except httpx.HTTPStatusError as err:
         if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
@@ -330,7 +369,7 @@ async def _fetch_attachment(
         if delay:
             await asyncio.sleep(delay)
         try:
-            content, headers = await app.client.fetch_bytes(path, params=params)
+            content, headers = await _download_attachment_bytes(app, path, params)
             return content, headers, None
         except httpx.HTTPStatusError as err:
             if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
