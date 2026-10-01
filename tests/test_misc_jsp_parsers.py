@@ -10,6 +10,7 @@ from schoolsoft_mcp.parsers.misc_jsp import (
     parse_contacts,
     parse_library_files,
     parse_school_info,
+    parse_staff,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -159,3 +160,62 @@ def test_library_empty_returns_note() -> None:
     lf = parse_library_files("<html><body></body></html>", school="X")
     assert lf.files == []
     assert lf.note is not None
+
+
+# ----------------------------------------------------------------------------
+# Personallista — teachers' e-mail lives here and nowhere else.
+# ----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def staff_html() -> str:
+    return (FIXTURES / "staff.html").read_text(encoding="utf-8")
+
+
+def test_staff_name_is_first_then_last(staff_html: str) -> None:
+    """The page bolds the surname first; the schedule writes "Förnamn Efternamn"."""
+    sl = parse_staff(staff_html, school="X")
+    assert [m.name for m in sl.staff] == ["Alice Andersson", "Bo Berg Lind", "Cecilia Cederberg"]
+    bo = sl.staff[1]
+    assert (bo.first_name, bo.last_name) == ("Bo", "Berg Lind")
+
+
+def test_staff_email_from_mailto_or_text(staff_html: str) -> None:
+    by_name = {m.name: m for m in parse_staff(staff_html, school="X").staff}
+    assert by_name["Alice Andersson"].email == "alice.andersson@example.test"
+    assert by_name["Cecilia Cederberg"].email == "cecilia@example.test"
+
+
+def test_staff_roles_split_on_br(staff_html: str) -> None:
+    by_name = {m.name: m for m in parse_staff(staff_html, school="X").staff}
+    assert by_name["Cecilia Cederberg"].roles == ["Biträdande rektor", "Lärare"]
+
+
+def test_staff_listed_in_two_sections_is_merged(staff_html: str) -> None:
+    """A mentor who also teaches appears under both headings, once without roles."""
+    sl = parse_staff(staff_html, school="X")
+    alice = [m for m in sl.staff if m.name == "Alice Andersson"]
+    assert len(alice) == 1
+    assert alice[0].groups == ["Mentorer", "Lärare"]
+    assert alice[0].roles == ["Lärare"]
+    assert alice[0].phone == "070-000 00 01"  # filled from the second listing
+    assert len(sl.staff) == 3
+
+
+def test_staff_groups_come_from_section_headings(staff_html: str) -> None:
+    by_name = {m.name: m for m in parse_staff(staff_html, school="X").staff}
+    assert by_name["Bo Berg Lind"].groups == ["Lärare"]
+    assert by_name["Cecilia Cederberg"].groups == ["Skolledare"]
+
+
+def test_staff_phone_and_contact_info(staff_html: str) -> None:
+    by_name = {m.name: m for m in parse_staff(staff_html, school="X").staff}
+    assert by_name["Alice Andersson"].phone == "070-000 00 01"
+    assert by_name["Bo Berg Lind"].phone == ""
+    assert by_name["Cecilia Cederberg"].contact_info == "Nås bäst förmiddagar"
+
+
+def test_staff_unrecognised_layout_gives_note() -> None:
+    sl = parse_staff("<html><table><tr><td>x</td></tr></table></html>", school="X")
+    assert sl.staff == []
+    assert sl.note and "dump_page" in sl.note

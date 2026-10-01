@@ -63,6 +63,7 @@ from .models import (
     ResultList,
     ScheduleWeek,
     SchoolInformation,
+    StaffList,
     StudentDocument,
     StudentDocumentDetail,
     StudentDocumentList,
@@ -106,9 +107,11 @@ from .parsers.misc_jsp import (
     CONTACTS_PATHS,
     LIBRARY_PATHS,
     SCHOOL_INFO_PATHS,
+    STAFF_PATHS,
     parse_contacts,
     parse_library_files,
     parse_school_info,
+    parse_staff,
 )
 from .parsers.news import MESSAGES_PATHS, NEWS_PATHS, parse_messages, parse_news
 from .parsers.schedule import (
@@ -615,12 +618,60 @@ async def get_contacts(
     Maps to Skolinfo → Kontaktlistor. Each :class:`Contact` carries
     name, phone (when published), and address. Use with care — this is
     PII the school shares between class families.
+
+    Teachers are not on this list. For a teacher's e-mail or work phone,
+    use ``get_staff``.
     """
     app = _app(ctx)
     async with app.lock:
         await _select_child(app, student_id)
         html = await _fetch_first(app.client, CONTACTS_PATHS)
     return _stamp(parse_contacts(html, school=app.settings.school))
+
+
+@mcp.tool()
+async def get_staff(
+    ctx: Context[Any, AppContext, Any],
+    student_id: int | None = None,
+    query: str | None = None,
+) -> StaffList:
+    """Return the school's staff list: names, roles, sections, work phone and e-mail.
+
+    Maps to Skolinfo → Personallista. **This is where teacher e-mail
+    addresses are** — the schedule, lesson detail and subject rooms only
+    carry names, and ``get_contacts`` is the classmate/guardian list.
+    The list covers the whole school, not only the child's own teachers;
+    ``student_id`` only picks which child's session reads it. To find a
+    child's teacher, take the name from ``get_schedule`` or
+    ``get_lesson_detail`` and pass it as ``query``.
+
+    ``query`` filters case-insensitively on name, role, section or e-mail
+    — every word must match ("Susana", "Cabrera Gonzalez", "mentor",
+    "rektor", "skolsköterska"). Mentors are a section of the page
+    (``groups``), not a role. Names come back as "Förnamn Efternamn", the
+    same order as the teacher names in ``get_schedule``, so a schedule name
+    can be passed straight in.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        html = await _fetch_first(app.client, STAFF_PATHS)
+    result = parse_staff(html, school=app.settings.school)
+    if query:
+        terms = query.lower().split()
+        result.staff = [
+            m for m in result.staff
+            if all(
+                t in " ".join([m.name, m.email, *m.roles, *m.groups]).lower() for t in terms
+            )
+        ]
+        result.matched = len(result.staff)
+        if not result.staff and result.note is None:
+            result.note = (
+                f"No staff member matched {query!r}. Call again without query to "
+                "see everyone listed for this child."
+            )
+    return _stamp(result)
 
 
 @mcp.tool()

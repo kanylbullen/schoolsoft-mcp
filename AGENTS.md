@@ -85,6 +85,7 @@ tests/
 | `get_fritids_times`   | Stable       | High       | Day cells by link, never by CSS class |
 | `get_student_documents`| Stable      | High       | Status from image filenames           |
 | `get_student_document`| Stable       | Medium     | Subject parts unverified: none filled |
+| `get_staff`           | Stable       | High       | Columns by header; merged on e-mail  |
 | `get_attendance`      | Experimental | Low        | Needs real-school HTML sample       |
 | `get_news`            | Experimental | Low        | Needs real-school HTML sample       |
 | `get_messages`        | Experimental | Low        | Needs real-school HTML sample       |

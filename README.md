@@ -480,6 +480,13 @@ a bare 404.
 - **`get_contacts(student_id?: int)`** — Classmate / guardian contact list for the
   active child (Skolinfo → Kontaktlistor). Each `Contact` carries
   name, phone (when published) and address. PII-heavy — handle with care.
+- **`get_staff(student_id?: int, query?: str)`** — The school's staff list (Skolinfo →
+  Personallista): name as "Förnamn Efternamn", roles, the page section(s) the person is
+  listed under (`Mentorer`, `Lärare`, `Skolledare`, …), work phone and **e-mail**. This is
+  the only place teacher e-mail addresses exist; the schedule and lesson detail carry names
+  only. People listed in several sections are merged into one entry. `query` filters on
+  name, role, section or e-mail, every word must match — pass a teacher name from
+  `get_schedule` straight in.
 
 ### Library
 

@@ -2,6 +2,7 @@
 
 - ``right_student_school.jsp``  → ``SchoolInformation`` (free-form text)
 - ``right_student_class.jsp``   → ``ContactList`` (classmate contacts)
+- ``right_student_staff.jsp``   → ``StaffList`` (teachers and staff, with e-mail)
 - ``right_student_library.jsp`` → ``LibraryFileList`` (shared files)
 
 These pages are simple HTML scrapes — no REST equivalents exist for
@@ -24,6 +25,8 @@ from ..models import (
     LibraryFile,
     LibraryFileList,
     SchoolInformation,
+    StaffList,
+    StaffMember,
 )
 from .attachments import guess_content_type
 
@@ -31,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 SCHOOL_INFO_PATHS = ("jsp/student/right_student_school.jsp",)
 CONTACTS_PATHS = ("jsp/student/right_student_class.jsp",)
+STAFF_PATHS = ("jsp/student/right_student_staff.jsp",)
 LIBRARY_PATHS = ("jsp/student/right_student_library.jsp",)
 
 _SIZE_RE = re.compile(r"\(([\d.,]+)\s*(B|KB|MB|GB)\)", re.IGNORECASE)
@@ -106,6 +110,131 @@ def parse_contacts(html: str, *, school: str) -> ContactList:
         "dump_page('jsp/student/right_student_class.jsp') to inspect."
     )
     return ContactList(school=school, contacts=contacts, note=note)
+
+
+# Header text (lower-cased, substring) -> StaffMember field.
+_STAFF_COLS = (
+    ("namn", "name"),
+    ("roll", "roles"),
+    ("telefon", "phone"),
+    ("e-post", "email"),
+    ("epost", "email"),
+    ("mail", "email"),
+    ("kontakt", "contact_info"),
+)
+
+
+def parse_staff(html: str, *, school: str) -> StaffList:
+    """Parse Skolinfo → Personallista into one :class:`StaffMember` per row.
+
+    Columns are found by their header text, not position. The name cell
+    puts the surname in ``span.name_bold`` followed by the first name; it
+    is returned as "Förnamn Efternamn" so it matches the teacher names in
+    the schedule. Roles are separated by ``<br>``. The e-mail is read from
+    the ``mailto:`` link when there is one, else from the cell text.
+
+    It is the whole school's list — verified identical for three children
+    in different years. The page splits it into sections under
+    ``div.h3_bold`` headings ("Mentorer", "Lärare", "Skolledare", …) and
+    the same person appears in every section they belong to — a mentor who
+    also teaches is listed twice, once without roles. Rows are merged on
+    e-mail (else name): roles are unioned and the headings kept in ``groups``.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    staff: list[StaffMember] = []
+    by_key: dict[str, StaffMember] = {}
+
+    for table in soup.find_all("table"):
+        if not isinstance(table, Tag):
+            continue
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        cols: dict[str, int] = {}
+        for index, cell in enumerate(rows[0].find_all(["td", "th"])):
+            text = cell.get_text(" ", strip=True).lower()
+            for needle, field in _STAFF_COLS:
+                if needle in text:
+                    cols.setdefault(field, index)
+                    break
+        if "name" not in cols or "email" not in cols:
+            continue
+        heading = table.find_previous("div", class_="h3_bold")
+        group = _clean(heading.get_text(" ", strip=True)) if isinstance(heading, Tag) else ""
+
+        for row in rows[1:]:
+            cells = row.find_all("td")
+            if len(cells) <= cols["name"]:
+                continue
+            name_cell = cells[cols["name"]]
+            bold = name_cell.find(class_="name_bold")
+            full = _clean(name_cell.get_text(" ", strip=True))
+            if not full:
+                continue
+            if isinstance(bold, Tag):
+                last = _clean(bold.get_text(" ", strip=True))
+                first = _clean(full[len(last):]) if full.startswith(last) else ""
+            else:
+                last, first = "", ""
+            name = f"{first} {last}".strip() if (first or last) else full
+
+            roles: list[str] = []
+            role_cell = _staff_cell(cells, cols, "roles")
+            if role_cell is not None:
+                roles = [
+                    r for r in (_clean(x) for x in role_cell.get_text("\n").split("\n")) if r
+                ]
+
+            email = ""
+            email_cell = _staff_cell(cells, cols, "email")
+            if email_cell is not None:
+                link = email_cell.find("a", href=re.compile(r"^mailto:", re.IGNORECASE))
+                if isinstance(link, Tag):
+                    email = str(link.get("href", ""))[len("mailto:"):].split("?", 1)[0].strip()
+                if not email:
+                    email = _clean(email_cell.get_text(" ", strip=True))
+
+            phone_cell = _staff_cell(cells, cols, "phone")
+            info_cell = _staff_cell(cells, cols, "contact_info")
+            phone = _clean(phone_cell.get_text(" ", strip=True)) if phone_cell else ""
+            info = _clean(info_cell.get_text(" ", strip=True)) if info_cell else ""
+
+            key = email.lower() or name.lower()
+            existing = by_key.get(key)
+            if existing is not None:
+                existing.roles += [r for r in roles if r not in existing.roles]
+                if group and group not in existing.groups:
+                    existing.groups.append(group)
+                existing.phone = existing.phone or phone
+                existing.contact_info = existing.contact_info or info
+                continue
+            member = StaffMember(
+                name=name,
+                first_name=first,
+                last_name=last,
+                roles=roles,
+                groups=[group] if group else [],
+                phone=phone,
+                email=email,
+                contact_info=info,
+            )
+            by_key[key] = member
+            staff.append(member)
+
+    note = None if staff else (
+        "No staff parsed. Page layout may differ — call "
+        "dump_page('jsp/student/right_student_staff.jsp') to inspect."
+    )
+    return StaffList(school=school, staff=staff, note=note)
+
+
+def _staff_cell(cells: list[Tag], cols: dict[str, int], field: str) -> Tag | None:
+    idx = cols.get(field)
+    return cells[idx] if idx is not None and idx < len(cells) else None
+
+
+def _clean(text: str) -> str:
+    return " ".join(text.replace("\xa0", " ").split())
 
 
 def _id_text(scope: Tag, element_id: str) -> str:

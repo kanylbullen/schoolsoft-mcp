@@ -462,6 +462,41 @@ class ContactList(BaseModel):
     as_of: AsOf | None = None
 
 
+class StaffMember(BaseModel):
+    """One person on Skolinfo → Personallista, the school's staff list."""
+
+    name: str = Field(description='Display name, "Förnamn Efternamn" — the order the schedule uses.')
+    first_name: str = ""
+    last_name: str = ""
+    roles: list[str] = Field(
+        default_factory=list,
+        description='Roles as SchoolSoft lists them, e.g. "Lärare", "Lärarresurs", "Biträdande rektor".',
+    )
+    groups: list[str] = Field(
+        default_factory=list,
+        description=(
+            'The page sections the person is listed under — "Mentorer", "Lärare", '
+            '"Skolledare", "Elevvårdare", "Övrig personal". "Mentorer" lists every mentor at the '
+            "school, not the child's own; a mentor is found here, not in roles."
+        ),
+    )
+    phone: str = Field(default="", description="Work phone, when published.")
+    email: str = Field(default="", description="Work e-mail address.")
+    contact_info: str = Field(default="", description="Free-text Kontaktinfo column, usually empty.")
+
+
+class StaffList(BaseModel):
+    """The school's staff list, optionally filtered by ``query``."""
+
+    school: str
+    staff: list[StaffMember]
+    matched: int | None = Field(
+        default=None, description="How many rows matched ``query``, when one was given."
+    )
+    note: str | None = None
+    as_of: AsOf | None = None
+
+
 class LibraryFile(BaseModel):
     """One file in the school's shared library / filer & länkar."""
 
