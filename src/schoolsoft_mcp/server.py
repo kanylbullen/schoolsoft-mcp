@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 import httpx
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import Context, FastMCP, Image
 
 from .cache import PlanningCache
 from .client import (
@@ -115,6 +115,7 @@ from .parsers.misc_jsp import (
     parse_staff,
 )
 from .parsers.news import MESSAGES_PATHS, NEWS_PATHS, parse_messages, parse_news
+from .parsers.pdf_pages import render_pages
 from .parsers.schedule import (
     SCHEDULE_PATHS,
     SCHEDULE_REST_EVENTS_PATH_TEMPLATE,
@@ -529,8 +530,13 @@ def _text_result(
     fallback_name: str,
     max_chars: int,
     offset: int,
+    pages_tool: str,
 ) -> AttachmentText:
-    """Shape a download as extracted text, one ``max_chars`` window at a time."""
+    """Shape a download as extracted text, one ``max_chars`` window at a time.
+
+    ``pages_tool`` is the tool that shows the same file as page images — the
+    way to read a scan, which has no text to extract.
+    """
     filename = filename_from_headers(headers, fallback_name)
     content_type = _content_type(headers, filename)
     if note is not None:
@@ -551,11 +557,13 @@ def _text_result(
         text = text[offset:]
         if len(text) >= max_chars:
             truncated = True
-    if not text.strip() and offset == 0 and extract_note is None and content:
+    if content_type.startswith("image/") or (
+        not text.strip() and offset == 0 and extract_note is None and content
+    ):
         extract_note = (
-            "The file downloaded but holds no extractable text — most likely a "
-            "scanned page or an image saved as PDF. Use the download tool for "
-            "the raw bytes."
+            "The file holds no extractable text — it is an image or a scanned "
+            f"page. Call {pages_tool} with the same arguments to get the pages "
+            "as images, and read them."
         )
     return AttachmentText(
         filename=filename,
@@ -566,6 +574,37 @@ def _text_result(
         next_offset=offset + len(text) if truncated else None,
         note=extract_note,
     )
+
+
+def _pages_result(
+    content: bytes,
+    headers: dict[str, str],
+    note: str | None,
+    *,
+    fallback_name: str,
+    start_page: int,
+    max_pages: int,
+) -> list[str | Image]:
+    """A one-line summary followed by the rendered pages as images."""
+    if note is not None:
+        return [note]
+    filename = filename_from_headers(headers, fallback_name)
+    pages = render_pages(
+        content,
+        _content_type(headers, filename),
+        start_page=start_page,
+        max_pages=max_pages,
+    )
+    if pages.note is not None:
+        return [f"{filename}: {pages.note}"]
+    last = pages.first_page + len(pages.images) - 1
+    summary = (
+        f"{filename}: pages {pages.first_page}-{last} of {pages.total_pages}, "
+        "as images. Read the text off them directly."
+    )
+    if pages.next_page is not None:
+        summary += f" More pages: call again with start_page={pages.next_page}."
+    return [summary, *(Image(data=data, format=pages.image_format) for data in pages.images)]
 
 
 async def _fetch_first(
@@ -1682,6 +1721,48 @@ async def read_attachment_text(
         fallback_name=f"attachment_{fileid}",
         max_chars=max_chars,
         offset=offset,
+        pages_tool="view_attachment_pages",
+    )
+
+
+@mcp.tool(structured_output=False)
+async def view_attachment_pages(
+    ctx: Context[Any, AppContext, Any],
+    news_id: int,
+    fileid: int,
+    type_id: int = 1,
+    object_kind: str = "news",
+    student_id: int | None = None,
+    start_page: int = 1,
+    max_pages: int = 5,
+) -> list[str | Image]:
+    """Show a news/message attachment's pages as images, to read a scan.
+
+    Use when ``read_attachment_text`` says the file holds no extractable
+    text — a scanned veckobrev or a photo. Takes the same arguments.
+    Returns a summary line and up to ``max_pages`` page images (fewer if
+    they would overflow the result); the summary gives the ``start_page``
+    to continue from.
+    """
+    if object_kind not in {"news", "message"}:
+        raise ValueError("object_kind must be 'news' or 'message'")
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        content, headers, note = await _fetch_attachment(
+            app,
+            news_id=news_id,
+            fileid=fileid,
+            type_id=type_id,
+            object_kind=object_kind,
+        )
+    return _pages_result(
+        content,
+        headers,
+        note,
+        fallback_name=f"attachment_{fileid}",
+        start_page=start_page,
+        max_pages=max_pages,
     )
 
 
@@ -1721,6 +1802,40 @@ async def read_material_text(
         fallback_name=f"material_{file_id}",
         max_chars=max_chars,
         offset=offset,
+        pages_tool="view_material_pages",
+    )
+
+
+@mcp.tool(structured_output=False)
+async def view_material_pages(
+    ctx: Context[Any, AppContext, Any],
+    section_id: int,
+    file_id: int,
+    student_id: int | None = None,
+    start_page: int = 1,
+    max_pages: int = 5,
+) -> list[str | Image]:
+    """Show a homework/planning file's pages as images, to read a scan.
+
+    Use when ``read_material_text`` says the file holds no extractable text
+    — teachers often attach scanned worksheets. Takes the same
+    ``section_id`` / ``file_id`` / ``student_id``. Returns a summary line
+    and up to ``max_pages`` page images (fewer if they would overflow the
+    result); the summary gives the ``start_page`` to continue from.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        content, headers, note = await _fetch_material(
+            app, section_id=section_id, file_id=file_id
+        )
+    return _pages_result(
+        content,
+        headers,
+        note,
+        fallback_name=f"material_{file_id}",
+        start_page=start_page,
+        max_pages=max_pages,
     )
 
 
