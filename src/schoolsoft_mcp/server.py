@@ -49,6 +49,7 @@ from .models import (
     LessonDetail,
     LibraryFileList,
     LunchWeek,
+    MaterialLink,
     MessageList,
     NewsFeed,
     NewsItem,
@@ -229,6 +230,12 @@ _ATTACHMENT_RETRY_STATUSES = frozenset({404})
 # signed URL rather than replaying the stale one.
 _ATTACHMENT_RETRY_DELAYS = (0.0, 1.5, 4.0)
 
+# A material file's signed /files/ URL answers 404 about a third of the time,
+# at random (see SchoolSoftClient.fetch_bytes). Six tries put a spurious
+# failure near 0.2 %.
+_SIGNED_URL_RETRIES = 5
+_SIGNED_URL_RETRY_DELAY = 0.5
+
 
 async def _select_child(
     app: AppContext, student_id: int | None, *, org_id: int | None = None
@@ -402,6 +409,162 @@ def _attachment_failure_note(err: Exception, *, news_id: int, fileid: int) -> st
         "child's student_id to this tool. If the right child is already "
         "selected, the file is missing on SchoolSoft's file server — open the "
         "item in the web UI to confirm."
+    )
+
+
+async def _fetch_material(
+    app: AppContext, *, section_id: int, file_id: int
+) -> tuple[bytes, dict[str, str], str | None]:
+    """Download a planning/assignment file. Returns ``(content, headers, note)``.
+
+    Same contract as :func:`_fetch_attachment`. The REST endpoint redirects
+    to the same ``/files/`` copy the JSP does, so it gets the same 404
+    backoff. Lock must be held.
+    """
+    path = sr.path(
+        sr.MATERIAL_FILE_DOWNLOAD,
+        app.settings.usertype,
+        section_id=section_id,
+        file_id=file_id,
+    )
+    last_failure: Exception | None = None
+    for delay in _ATTACHMENT_RETRY_DELAYS:
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            content, headers = await app.client.fetch_bytes(
+                path,
+                accept="*/*",
+                signed_url_retries=_SIGNED_URL_RETRIES,
+                signed_url_retry_delay=_SIGNED_URL_RETRY_DELAY,
+            )
+        except httpx.HTTPStatusError as err:
+            last_failure = err
+            if err.response.status_code not in _ATTACHMENT_RETRY_STATUSES:
+                break
+            continue
+        except (SchoolSoftConnectionError, SchoolSoftAccessError) as err:
+            last_failure = err
+            break
+        refusal = _attachment_refusal(content, headers)
+        if refusal is None:
+            return content, headers, None
+        last_failure = SchoolSoftAccessError(refusal)
+        break
+
+    detail = (
+        f"HTTP {last_failure.response.status_code}"
+        if isinstance(last_failure, httpx.HTTPStatusError)
+        else str(last_failure)
+    )
+    return b"", {}, (
+        f"Could not download file_id {file_id} of section_id {section_id} "
+        f"({detail}). Take both ids from the same ``material`` entry. SchoolSoft "
+        "only serves material for the child currently selected in the session: "
+        "pass the student_id of the child whose homework or planning listed "
+        "this file."
+    )
+
+
+def _content_type(headers: dict[str, str], filename: str) -> str:
+    """The most specific type in ``Content-Type``, else a guess from the name.
+
+    SchoolSoft's ``/files/`` copies answer ``application/octet-stream,
+    application/pdf`` — a list, not a type — which no extractor recognises.
+    """
+    candidates = [
+        part.split(";", 1)[0].strip().lower()
+        for part in headers.get("content-type", "").split(",")
+    ]
+    specific = [c for c in candidates if c and c != "application/octet-stream"]
+    return specific[0] if specific else guess_content_type(filename)
+
+
+def _bytes_result(
+    content: bytes,
+    headers: dict[str, str],
+    note: str | None,
+    *,
+    fallback_name: str,
+    max_bytes: int,
+    text_tool: str,
+) -> AttachmentBytes:
+    """Shape a download as base64, refusing anything over ``max_bytes``."""
+    filename = filename_from_headers(headers, fallback_name)
+    content_type = _content_type(headers, filename)
+    if note is not None:
+        return AttachmentBytes(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=0,
+            data_base64="",
+            note=note,
+        )
+    if len(content) > max_bytes:
+        return AttachmentBytes(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=len(content),
+            data_base64="",
+            note=(
+                f"File is {len(content):,} bytes — exceeds max_bytes={max_bytes:,} "
+                "to keep the tool result under the 1 MB MCP cap. Use "
+                f"{text_tool} to get extracted plain text instead, "
+                "or call again with a larger max_bytes if you really need raw bytes."
+            ),
+        )
+    return AttachmentBytes(
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(content),
+        data_base64=base64.b64encode(content).decode("ascii"),
+    )
+
+
+def _text_result(
+    content: bytes,
+    headers: dict[str, str],
+    note: str | None,
+    *,
+    fallback_name: str,
+    max_chars: int,
+    offset: int,
+) -> AttachmentText:
+    """Shape a download as extracted text, one ``max_chars`` window at a time."""
+    filename = filename_from_headers(headers, fallback_name)
+    content_type = _content_type(headers, filename)
+    if note is not None:
+        return AttachmentText(
+            filename=filename,
+            content_type=content_type,
+            size_bytes=0,
+            text="",
+            note=note,
+        )
+    # Extract enough to satisfy offset + max_chars, then slice. Keeps the
+    # parser simple (no per-format streaming) while still letting callers
+    # paginate through large documents.
+    text, truncated, extract_note = extract_text(
+        content, content_type, limit=offset + max_chars
+    )
+    if offset > 0:
+        text = text[offset:]
+        if len(text) >= max_chars:
+            truncated = True
+    if not text.strip() and offset == 0 and extract_note is None and content:
+        extract_note = (
+            "The file downloaded but holds no extractable text — most likely a "
+            "scanned page or an image saved as PDF. Use the download tool for "
+            "the raw bytes."
+        )
+    return AttachmentText(
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(content),
+        text=text,
+        truncated=truncated,
+        next_offset=offset + len(text) if truncated else None,
+        note=extract_note,
     )
 
 
@@ -723,6 +886,7 @@ async def get_homework(
     student_id: int | None = None,
     include_body: bool = True,
     max_body_chars: int = 4000,
+    include_material: bool = False,
 ) -> HomeworkList:
     """Return assignments / läxor / prov for the given ISO week.
 
@@ -732,6 +896,11 @@ async def get_homework(
     start-page endpoint alone gives none of those, only a prose subtitle.
 
     Set ``include_body=False`` to skip one request per assignment.
+
+    Set ``include_material=True`` to list the files and links the teacher
+    attached (``material``) — most assignments have some. It costs about
+    three requests per assignment. Read a listed file with
+    ``read_material_text(section_id, file_id, student_id)``.
     """
     app = _app(ctx)
     now = _now_as_of()
@@ -770,6 +939,16 @@ async def get_homework(
                 view = await _assignment_view(
                     app, row["assignment_id"], max_body_chars
                 )
+            material: list[MaterialLink] = []
+            if include_material and row["assignment_id"] is not None:
+                material = await _material_for(
+                    app,
+                    sr.path(
+                        sr.ASSIGNMENT_SECTIONS,
+                        usertype,
+                        assignment_id=row["assignment_id"],
+                    ),
+                )
             items.append(
                 HomeworkItem(
                     title=view.get("title") or row["title"],
@@ -790,6 +969,7 @@ async def get_homework(
                     status=row["status"],
                     body=view.get("body", ""),
                     description=view.get("body", "") or row["title"],
+                    material=material,
                 )
             )
 
@@ -1131,7 +1311,10 @@ async def get_planning_detail(
             fingerprint=sr.row_fingerprint(row) if row else None,
             refresh=refresh,
         )
-        material = await _material_for(app, part_id)
+        material = await _material_for(
+            app,
+            sr.path(sr.PLANNING_PART_SECTIONS, app.settings.usertype, part_id=part_id),
+        )
 
     return _stamp(
         sr.parse_planning_detail(
@@ -1165,20 +1348,28 @@ async def _planning_row_for(
     return {}
 
 
-async def _material_for(app: AppContext, section_id: int) -> list[Any]:
-    """Files + links hung on a planning or assignment. Lock must be held."""
+async def _material_for(app: AppContext, sections_path: str) -> list[MaterialLink]:
+    """Files + links on every section of a planning part or assignment.
+
+    ``sections_path`` is ``ASSIGNMENT_SECTIONS`` or ``PLANNING_PART_SECTIONS``
+    filled in. Lock must be held.
+    """
     usertype = app.settings.usertype
-    files = await _fetch_json_or_none(
-        app,
-        sr.path(sr.MATERIAL_FILES, usertype, section_id=section_id),
-        label="Material files",
-    )
-    links = await _fetch_json_or_none(
-        app,
-        sr.path(sr.MATERIAL_LINKS, usertype, section_id=section_id),
-        label="Material links",
-    )
-    return sr.parse_material(files, links)
+    sections = await _fetch_json_or_none(app, sections_path, label="Material sections")
+    material: list[MaterialLink] = []
+    for section_id in sr.parse_section_ids(sections):
+        files = await _fetch_json_or_none(
+            app,
+            sr.path(sr.MATERIAL_FILES, usertype, section_id=section_id),
+            label="Material files",
+        )
+        links = await _fetch_json_or_none(
+            app,
+            sr.path(sr.MATERIAL_LINKS, usertype, section_id=section_id),
+            label="Material links",
+        )
+        material.extend(sr.parse_material(files, links, section_id=section_id))
+    return material
 
 
 @mcp.tool()
@@ -1433,38 +1624,13 @@ async def download_attachment(
             type_id=type_id,
             object_kind=object_kind,
         )
-    fallback_name = f"attachment_{fileid}"
-    filename = filename_from_headers(headers, fallback_name)
-    content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
-
-    if note is not None:
-        return AttachmentBytes(
-            filename=filename,
-            content_type=content_type,
-            size_bytes=0,
-            data_base64="",
-            note=note,
-        )
-
-    if len(content) > max_bytes:
-        return AttachmentBytes(
-            filename=filename,
-            content_type=content_type,
-            size_bytes=len(content),
-            data_base64="",
-            note=(
-                f"File is {len(content):,} bytes — exceeds max_bytes={max_bytes:,} "
-                "to keep the tool result under the 1 MB MCP cap. Use "
-                "read_attachment_text to get extracted plain text instead, "
-                "or call again with a larger max_bytes if you really need raw bytes."
-            ),
-        )
-
-    return AttachmentBytes(
-        filename=filename,
-        content_type=content_type,
-        size_bytes=len(content),
-        data_base64=base64.b64encode(content).decode("ascii"),
+    return _bytes_result(
+        content,
+        headers,
+        note,
+        fallback_name=f"attachment_{fileid}",
+        max_bytes=max_bytes,
+        text_tool="read_attachment_text",
     )
 
 
@@ -1509,37 +1675,82 @@ async def read_attachment_text(
             type_id=type_id,
             object_kind=object_kind,
         )
-    fallback_name = f"attachment_{fileid}"
-    filename = filename_from_headers(headers, fallback_name)
-    content_type = headers.get("content-type", guess_content_type(filename)).split(";")[0].strip()
-
-    if failure is not None:
-        return AttachmentText(
-            filename=filename,
-            content_type=content_type,
-            size_bytes=0,
-            text="",
-            note=failure,
-        )
-
-    # Extract enough to satisfy offset + max_chars, then slice. Keeps the
-    # parser simple (no per-format streaming) while still letting callers
-    # paginate through large documents.
-    text, truncated, note = extract_text(
-        content, content_type, limit=offset + max_chars
+    return _text_result(
+        content,
+        headers,
+        failure,
+        fallback_name=f"attachment_{fileid}",
+        max_chars=max_chars,
+        offset=offset,
     )
-    if offset > 0:
-        text = text[offset:]
-        if len(text) >= max_chars:
-            truncated = True
-    return AttachmentText(
-        filename=filename,
-        content_type=content_type,
-        size_bytes=len(content),
-        text=text,
-        truncated=truncated,
-        next_offset=offset + len(text) if truncated else None,
-        note=note,
+
+
+@mcp.tool()
+async def read_material_text(
+    ctx: Context[Any, AppContext, Any],
+    section_id: int,
+    file_id: int,
+    student_id: int | None = None,
+    max_chars: int = 50_000,
+    offset: int = 0,
+) -> AttachmentText:
+    """Read a file a teacher attached to homework or a planning, as plain text.
+
+    Take ``section_id`` and ``file_id`` from one ``material`` entry of
+    ``get_homework(include_material=True)`` or ``get_planning_detail``.
+    These files are not news attachments: ``read_attachment_text`` cannot
+    fetch them, and their ``url`` is empty.
+
+    Supports PDF, .docx and plain text; for other types ``note`` says so and
+    ``download_material`` gives the raw bytes. Page through long documents
+    with ``offset``, as with ``read_attachment_text``.
+
+    On a multi-child parent account, pass the ``student_id`` the material
+    was listed for.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        content, headers, failure = await _fetch_material(
+            app, section_id=section_id, file_id=file_id
+        )
+    return _text_result(
+        content,
+        headers,
+        failure,
+        fallback_name=f"material_{file_id}",
+        max_chars=max_chars,
+        offset=offset,
+    )
+
+
+@mcp.tool()
+async def download_material(
+    ctx: Context[Any, AppContext, Any],
+    section_id: int,
+    file_id: int,
+    student_id: int | None = None,
+    max_bytes: int = 700_000,
+) -> AttachmentBytes:
+    """Download a file attached to homework or a planning as base64 bytes.
+
+    **For reading content, use ``read_material_text`` instead.** Takes the
+    same ``section_id`` / ``file_id`` / ``student_id``, and refuses files over
+    ``max_bytes`` the way ``download_attachment`` does.
+    """
+    app = _app(ctx)
+    async with app.lock:
+        await _select_child(app, student_id)
+        content, headers, note = await _fetch_material(
+            app, section_id=section_id, file_id=file_id
+        )
+    return _bytes_result(
+        content,
+        headers,
+        note,
+        fallback_name=f"material_{file_id}",
+        max_bytes=max_bytes,
+        text_tool="read_material_text",
     )
 
 

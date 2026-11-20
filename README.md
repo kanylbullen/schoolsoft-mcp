@@ -17,9 +17,11 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | ----------------------- | ------------ | ---------------------------------------------------------------- |
 | `get_lunch_menu`        | Stable       | Ported from a working Home Assistant integration.                |
 | `get_schedule`          | Stable       | REST calendar rows; the JSP scraper remains as a fallback.       |
-| `get_homework`          | Stable       | REST assignment grid plus each assignment's full text.           |
+| `get_homework`          | Stable       | REST assignment grid plus each assignment's full text and files. |
 | `get_planning`          | Stable       | REST subject-room grid plus each planning's body.                |
 | `get_planning_detail`   | Stable       | One planning in full, with its files and links.                  |
+| `read_material_text`    | Stable       | Text of a file attached to homework or a planning.               |
+| `download_material`     | Stable       | The same file as raw bytes.                                      |
 | `get_subject_rooms`     | Stable       | Subject rooms and teachers; `activity_id` is the join key.       |
 | `get_exam_schedule`     | Stable       | Dates are the announcement window, not the exam date.            |
 | `get_lesson_detail`     | Stable       | Room, teachers and group for one lesson.                         |
@@ -235,12 +237,14 @@ All tools accept no arguments unless noted.
   breaks/lunch. All-day events (sport days, planning bands) are merged
   into `all_day_events`. Uses REST when available, falls back to the
   legacy JSP scraper on non-2xx.
-- **`get_homework(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000)`**
+- **`get_homework(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000, include_material? = False)`**
   — Assignments / läxor / prov overlapping the given ISO week. Each item
   carries `title`, `subject`, `kind` (e.g. "Diagnos", "Läxa"), ISO
   `start_date`/`end_date`, `teacher`, `status`, `submission_status`,
   `result_status`, IDs, and `body` — the assignment's full text, which
-  the week-scoped start-page endpoint does not return.
+  the week-scoped start-page endpoint does not return. With
+  `include_material=True` each item also lists the files and links the
+  teacher attached in `material` (about three extra requests per item).
 - **`get_planning(week?, year?, student_id?, include_body? = True, max_body_chars? = 4000, refresh? = False)`**
   — Lesson plans (planeringar) **in force during** the given ISO week.
 
@@ -279,6 +283,13 @@ All tools accept no arguments unless noted.
   *Caching* under Configuration for the knobs.
 - **`get_planning_detail(part_id: int, week?: int, student_id?: int, max_body_chars? = 20000, refresh? = False)`**
   — One planning in full, with the files and links the teacher attached.
+- **`read_material_text(section_id: int, file_id: int, student_id?: int, max_chars?: int = 50_000, offset?: int = 0)`**
+  — Extracted text of a file from a `material` entry (homework or
+  planning). These files have no URL and are not news attachments, so
+  `read_attachment_text` cannot reach them. Pass the `student_id` the
+  material was listed for.
+- **`download_material(section_id: int, file_id: int, student_id?: int, max_bytes?: int = 700_000)`**
+  — The same file as base64 bytes.
 - **`get_subject_rooms(student_id?: int, include_teachers? = True)`** —
   The child's subject rooms (ämnesrum) with their teachers. Each room's
   `activity_id` is the join key used across plannings, assignments and

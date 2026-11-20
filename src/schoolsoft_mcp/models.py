@@ -212,9 +212,10 @@ class HomeworkItem(BaseModel):
     )
     material: list[MaterialLink] = Field(
         default_factory=list,
-        description="Files and links attached to the assignment. Only "
-        "``get_planning_detail`` fills this in; on a listing it is always "
-        "empty, which means 'not fetched', not 'no attachments'.",
+        description="Files and links attached to the assignment. Filled in "
+        "only when ``get_homework`` is called with ``include_material=True``; "
+        "otherwise it is always empty, which means 'not fetched', not 'no "
+        "attachments'.",
     )
 
 
@@ -632,9 +633,18 @@ class MaterialLink(BaseModel):
     url: str | None = None
     file_id: int | None = Field(
         default=None,
-        description="SchoolSoft's internal id for the file. There is no tool "
-        "that takes it — fetch the file through ``url`` instead. Present so a "
-        "caller can tell two attachments with the same name apart.",
+        description="SchoolSoft's id for the file. For a file, pass it with "
+        "``section_id`` to ``read_material_text`` (content as text) or "
+        "``download_material`` (raw bytes). ``url`` is empty for files — they "
+        "are only reachable through those tools.",
+    )
+    section_id: int | None = Field(
+        default=None,
+        description="The section of the planning part or assignment the file "
+        "hangs off. Required, with ``file_id``, to fetch the file.",
+    )
+    size_bytes: int | None = Field(
+        default=None, description="File size as SchoolSoft reports it."
     )
 
 

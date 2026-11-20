@@ -73,6 +73,8 @@ tests/
 | `get_homework`        | Stable       | High       | REST grid + assignment view         |
 | `get_planning`        | Stable       | High       | REST; body from planning_parts      |
 | `get_planning_detail` | Stable       | High       | Body, week lines and material       |
+| `read_material_text`  | Stable       | High       | Material by section_id + file_id    |
+| `download_material`   | Stable       | High       | Same file, raw bytes                |
 | `get_subject_rooms`   | Stable       | High       | REST; the activity_id join key      |
 | `get_exam_schedule`   | Stable       | Medium     | Dates are the announcement window   |
 | `get_lesson_detail`   | Stable       | Medium     | Room/teachers/group for one lesson  |
@@ -212,6 +214,19 @@ sanitized `dump_page` output.
   away, so a large file can 404 for a second or two while the copy lands
   (seen on a 3.9 MB PDF). `_fetch_attachment` re-requests the JSP with a
   short backoff — never replay the signed URL, it is one-shot.
+- **Material hangs off sections, not off the assignment**: an assignment
+  or planning part has sections (`ps/<assignments|planning_parts>/<id>/sections`),
+  and files and links are listed per section id. `ps/material/<assignmentId>/file`
+  answers an empty list for an assignment that has files. A file entry is
+  `{fileId, fileName, fileSize}` with no URL; it downloads from
+  `ps/material/<sectionId>/file/<fileId>`, which answers **406 to the
+  client's default HTML `Accept`** — `_fetch_material` sends `*/*`.
+- **The signed `/files/` copy of a material file 404s at random**: about a
+  third of requests to the same signed URL answer 404, with no window that
+  passes (measured 2026-11-20). Asking the same URL again works, so
+  material downloads pass `signed_url_retries` to `fetch_bytes`. This is
+  only verified for the REST material redirect, which is why it is off for
+  news attachments.
 - **Redirect handling**: the client deliberately sets
   `follow_redirects=False` so login success/failure can be detected from
   the `Location` header.

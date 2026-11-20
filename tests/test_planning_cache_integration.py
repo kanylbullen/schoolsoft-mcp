@@ -24,8 +24,7 @@ ROOT = f"{BASE}/yourschool"
 HEADER_URL = f"{ROOT}/rest-api/parent/header/parent"
 GRID_URL = f"{ROOT}/rest-api/parent/ps/subjectroom/plannings/grid/rows"
 VIEW_URL = f"{ROOT}/rest-api/parent/ps/planning_parts/900005/view"
-FILES_URL = f"{ROOT}/rest-api/parent/ps/material/900005/file"
-LINKS_URL = f"{ROOT}/rest-api/parent/ps/material/900005/link"
+SECTIONS_URL = f"{ROOT}/rest-api/parent/ps/planning_parts/900005/sections"
 
 CHILD = 900017
 HEADER_PAYLOAD = {
@@ -105,8 +104,7 @@ def _mock_session() -> None:
     respx.get(f"{ROOT}/jsp/start.jsp").mock(return_value=httpx.Response(200, text="ok"))
     respx.get(HEADER_URL).mock(return_value=httpx.Response(200, json=HEADER_PAYLOAD))
     respx.put(HEADER_URL).mock(return_value=httpx.Response(200, json={}))
-    respx.get(FILES_URL).mock(return_value=httpx.Response(404, text="nope"))
-    respx.get(LINKS_URL).mock(return_value=httpx.Response(404, text="nope"))
+    respx.get(SECTIONS_URL).mock(return_value=httpx.Response(404, text="nope"))
 
 
 @respx.mock

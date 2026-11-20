@@ -31,7 +31,9 @@ recorded payloads.
 | `ps/planning_parts/<partId>/view` | `{title, description, publishDate, subtitle}`. `description` is the teacher's HTML body — the payload everything else exists to locate. |
 | `ps/subjectroom/assignments/grid/rows` | Assignments (läxor, prov, inlämningar) with real dates. |
 | `ps/assignments/<id>/view` | An assignment's full text. |
-| `ps/material/<partId>/file`, `.../link` | Attachments and links. |
+| `ps/assignments/<id>/sections`, `ps/planning_parts/<partId>/sections` | `[{id, type}]`. Material is listed per section id — not per assignment or part id. |
+| `ps/material/<sectionId>/file`, `.../link` | Attachments and links. A file is `{fileId, fileName, fileSize}` with no URL. |
+| `ps/material/<sectionId>/file/<fileId>` | 303 to a signed `/files/` copy of the file. **Answers 406 to `Accept: text/html`; send `*/*`.** The signed copy 404s on about a third of requests, at random — ask it again. |
 | `calendar/subject_room/exam-schedule` | Announced exams. **The dates are the window the announcement is displayed in, not when the exam is written.** |
 | `calendar/lessons/<id>` | Room, teachers and group for one lesson. |
 | `ps/subjectroom/results/grid/rows` | Published results. **Carries no grade value** — see below. |
@@ -58,10 +60,8 @@ constant that looks tested is worse than no constant at all.
 | `ps/subjectroom/<activityId>` | One room's detail. |
 | `ps/subjectroom/unread_entities` | `{assignments, plannings, results, sum}` for the UI's badges. |
 | `ps/subjectroom/<activityId>/plannings/grid/rows` | Plannings scoped to one room. |
-| `ps/planning_parts/<partId>/sections` | A part's sections, which is how material ids are grouped. |
 | `ps/plannings/<planningId>/view` | The planning above its parts. |
 | `ps/plannings/<planningId>/planning_parts/tabs` | The parts a multi-part planning is split into. |
-| `ps/material/<partId>/file/<fileId>` | A single file's bytes. |
 | `holistic_assessment/<id>/school_support_activities` | Returned `null` on the tenant tested. |
 | `holistic_assessment/school_year` | `{start, end}` for the current school year. |
 
