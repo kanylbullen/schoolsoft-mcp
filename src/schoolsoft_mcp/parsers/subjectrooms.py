@@ -78,8 +78,16 @@ PLANNING_PART_VIEW = "rest-api/{ut}/ps/planning_parts/{part_id}/view"
 ASSIGNMENT_ROWS = "rest-api/{ut}/ps/subjectroom/assignments/grid/rows"
 ASSIGNMENT_VIEW = "rest-api/{ut}/ps/assignments/{assignment_id}/view"
 
+# Material hangs off a *section* of a planning part or assignment, never off
+# the part or assignment id itself — asking ps/material/<assignmentId> answers
+# an empty list for an assignment that has files.
+ASSIGNMENT_SECTIONS = "rest-api/{ut}/ps/assignments/{assignment_id}/sections"
+PLANNING_PART_SECTIONS = "rest-api/{ut}/ps/planning_parts/{part_id}/sections"
 MATERIAL_FILES = "rest-api/{ut}/ps/material/{section_id}/file"
 MATERIAL_LINKS = "rest-api/{ut}/ps/material/{section_id}/link"
+# Answers 303 to a signed /files/<school>/tmp_file_*.tmp URL. Refuses an
+# ``Accept: text/html`` request with 406, so it must be fetched with */*.
+MATERIAL_FILE_DOWNLOAD = "rest-api/{ut}/ps/material/{section_id}/file/{file_id}"
 
 EXAM_SCHEDULE = "rest-api/{ut}/calendar/subject_room/exam-schedule"
 LESSON_DETAIL = "rest-api/{ut}/calendar/lessons/{lesson_id}"
@@ -526,8 +534,22 @@ def parse_detail_view(
     return out
 
 
-def parse_material(files: Any, links: Any) -> list[MaterialLink]:
-    """Merge ``ps/material/<id>/file`` and ``/link`` into one list."""
+def parse_section_ids(payload: Any) -> list[int]:
+    """Section ids from ``ps/<entity>/<id>/sections``: ``[{id, type}]``."""
+    if not isinstance(payload, list):
+        return []
+    ids = (_i(entry, "id") for entry in payload if isinstance(entry, dict))
+    return [section_id for section_id in ids if section_id is not None]
+
+
+def parse_material(
+    files: Any, links: Any, *, section_id: int | None = None
+) -> list[MaterialLink]:
+    """Merge ``ps/material/<sectionId>/file`` and ``/link`` into one list.
+
+    A file entry is ``{fileId, fileName, fileSize}`` and has no URL: it is
+    downloaded by ``section_id`` + ``file_id``.
+    """
     out: list[MaterialLink] = []
     if isinstance(files, list):
         for entry in files:
@@ -536,11 +558,13 @@ def parse_material(files: Any, links: Any) -> list[MaterialLink]:
             out.append(
                 MaterialLink(
                     kind="file",
-                    name=_s(entry, "displayName")
-                    or _s(entry, "fileName")
+                    name=_s(entry, "fileName")
+                    or _s(entry, "displayName")
                     or _s(entry, "name"),
                     url=_s(entry, "url") or None,
-                    file_id=_i(entry, "id"),
+                    file_id=_i(entry, "fileId") or _i(entry, "id"),
+                    section_id=section_id,
+                    size_bytes=_i(entry, "fileSize"),
                 )
             )
     if isinstance(links, list):
@@ -553,6 +577,7 @@ def parse_material(files: Any, links: Any) -> list[MaterialLink]:
                     name=_s(entry, "displayName") or _s(entry, "name"),
                     url=_s(entry, "url") or None,
                     file_id=_i(entry, "id"),
+                    section_id=section_id,
                 )
             )
     return out

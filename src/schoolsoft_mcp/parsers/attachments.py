@@ -86,10 +86,23 @@ def filename_from_headers(headers: dict[str, str], fallback: str) -> str:
     star = re.search(r"filename\*\s*=\s*[^']*''([^;]+)", cd, re.IGNORECASE)
     if star:
         return unquote(star.group(1).strip().strip('"'))
-    plain = re.search(r'filename\s*=\s*"?([^";]+)"?', cd, re.IGNORECASE)
+    # A quoted name may hold a ";" — SchoolSoft sends
+    # filename="Information; prov.pdf" — so it must not end at one.
+    quoted = re.search(r'filename\s*=\s*"((?:[^"\\]|\\.)*)"', cd, re.IGNORECASE)
+    if quoted:
+        return _utf8_from_latin1(quoted.group(1).replace('\\"', '"').strip()) or fallback
+    plain = re.search(r"filename\s*=\s*([^;]+)", cd, re.IGNORECASE)
     if plain:
-        return plain.group(1).strip()
+        return _utf8_from_latin1(plain.group(1).strip()) or fallback
     return fallback
+
+
+def _utf8_from_latin1(value: str) -> str:
+    """Undo httpx decoding a UTF-8 header as latin-1 ("Ã¥r" back to "år")."""
+    try:
+        return value.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
 
 
 def extract_text(

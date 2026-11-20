@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sys
@@ -224,12 +225,25 @@ class SchoolSoftClient:
         *,
         params: dict[str, str] | None = None,
         max_redirects: int = 5,
+        accept: str | None = None,
+        signed_url_retries: int = 0,
+        signed_url_retry_delay: float = 0.5,
     ) -> tuple[bytes, dict[str, str]]:
         """GET an authenticated resource as bytes, following non-login redirects.
 
         Returns ``(content, headers)`` where ``headers`` is a normalised
         lowercase dict (keys like ``content-type``, ``content-disposition``,
         ``content-length``).
+
+        ``accept`` overrides the client's HTML ``Accept`` header. The REST
+        material download answers ``406`` to ``text/html`` and needs ``*/*``.
+
+        ``signed_url_retries`` re-requests a ``/files/`` copy that answered
+        404, up to that many times. Observed 2026-11-20 on material
+        downloads: one signed URL, requested repeatedly, answered 200 and 404
+        in no pattern — about a third 404, with no window that passes. Waiting
+        does not help; asking again does. Off by default because it is only
+        verified for the REST material redirect.
 
         Re-authenticates once and retries if the first request either
         bounces to the JSP login page or returns a bare ``401`` / ``403``
@@ -242,11 +256,13 @@ class SchoolSoftClient:
 
         url: str = self.url_for(path)
         current_params: dict[str, str] | None = params
+        headers = {"Accept": accept} if accept else None
         attempts_after_relogin = 0
+        signed_retries_left = signed_url_retries
 
-        for _ in range(max_redirects + 1):
+        for _ in range(max_redirects + 1 + signed_url_retries):
             try:
-                resp = await self._client.get(url, params=current_params)
+                resp = await self._client.get(url, params=current_params, headers=headers)
             except httpx.HTTPError as err:
                 raise SchoolSoftConnectionError(f"GET {url} failed: {err}") from err
 
@@ -290,6 +306,12 @@ class SchoolSoftClient:
                     )
                 url = _resolve_redirect(location, url)
                 current_params = None  # query is now in the new Location
+                continue
+
+            if resp.status_code == 404 and signed_retries_left > 0 and _is_signed_file_url(url):
+                signed_retries_left -= 1
+                logger.debug("Signed file URL answered 404, asking again: %s", url)
+                await asyncio.sleep(signed_url_retry_delay)
                 continue
 
             resp.raise_for_status()
@@ -397,6 +419,11 @@ class SchoolSoftClient:
 def _looks_like_login_failure(location: str) -> bool:
     lowered = location.lower()
     return "login" in lowered or "error" in lowered
+
+
+def _is_signed_file_url(url: str) -> bool:
+    """A ``/files/<school>/tmp_file_<id>.tmp`` copy a download redirected to."""
+    return "/files/" in url and "tmp_file_" in url
 
 
 def _is_not_allowed_redirect(location: str) -> bool:
