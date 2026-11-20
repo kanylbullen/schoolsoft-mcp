@@ -54,6 +54,7 @@ src/schoolsoft_mcp/
     fritids.py       # STABLE — after-school care times (legacy JSP)
     student_documents.py  # STABLE — IUP grid + document parts (legacy JSP)
     lunch.py         # STABLE — ported from a working HA integration
+    pdf_pages.py     # STABLE — renders scanned pages as images (pypdfium2)
     subjectrooms.py  # STABLE — the REST planning/assignment surface
     schedule.py      # STABLE (REST rows, JSP fallback)
     homework.py      # STABLE (REST grid, JSP fallback + subtitle splitter)
@@ -75,6 +76,8 @@ tests/
 | `get_planning_detail` | Stable       | High       | Body, week lines and material       |
 | `read_material_text`  | Stable       | High       | Material by section_id + file_id    |
 | `download_material`   | Stable       | High       | Same file, raw bytes                |
+| `view_material_pages` | Stable       | High       | Pages as images; reads scans        |
+| `view_attachment_pages`| Stable      | Medium     | Same for news; no scanned news seen yet |
 | `get_subject_rooms`   | Stable       | High       | REST; the activity_id join key      |
 | `get_exam_schedule`   | Stable       | Medium     | Dates are the announcement window   |
 | `get_lesson_detail`   | Stable       | Medium     | Room/teachers/group for one lesson  |
@@ -227,6 +230,11 @@ sanitized `dump_page` output.
   material downloads pass `signed_url_retries` to `fetch_bytes`. This is
   only verified for the REST material redirect, which is why it is off for
   news attachments.
+- **A scan has no text, and its images may not decode**: school scanners
+  compress pages with JBIG2, which pypdf cannot decode without an external
+  `jbig2dec`. `parsers/pdf_pages.py` renders pages with PDFium instead and
+  returns them as images for the model to read. Don't "fix" an empty
+  `read_*_text` with OCR in the server — the client model reads the pages.
 - **Redirect handling**: the client deliberately sets
   `follow_redirects=False` so login success/failure can be detected from
   the `Location` header.

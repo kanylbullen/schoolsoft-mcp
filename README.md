@@ -22,6 +22,8 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_planning_detail`   | Stable       | One planning in full, with its files and links.                  |
 | `read_material_text`    | Stable       | Text of a file attached to homework or a planning.               |
 | `download_material`     | Stable       | The same file as raw bytes.                                      |
+| `view_material_pages`   | Stable       | The same file's pages as images — how a scanned worksheet is read. |
+| `view_attachment_pages` | Stable       | A news/message attachment's pages as images.                     |
 | `get_subject_rooms`     | Stable       | Subject rooms and teachers; `activity_id` is the join key.       |
 | `get_exam_schedule`     | Stable       | Dates are the announcement window, not the exam date.            |
 | `get_lesson_detail`     | Stable       | Room, teachers and group for one lesson.                         |
@@ -290,6 +292,16 @@ All tools accept no arguments unless noted.
   material was listed for.
 - **`download_material(section_id: int, file_id: int, student_id?: int, max_bytes?: int = 700_000)`**
   — The same file as base64 bytes.
+- **`view_material_pages(section_id: int, file_id: int, student_id?: int, start_page?: int = 1, max_pages?: int = 5)`**
+  — The file's pages rendered as JPEG images, for the model to read.
+  Teachers often attach scans, which have no text layer for
+  `read_material_text` to extract; that tool's `note` points here when
+  it finds none. Pages are rendered with PDFium (`pypdfium2`), which also
+  handles the JBIG2 compression school scanners use. The summary line
+  gives the `start_page` to continue from when a long document doesn't
+  fit in one result.
+- **`view_attachment_pages(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, start_page?: int = 1, max_pages?: int = 5)`**
+  — The same for a news or message attachment, e.g. a scanned veckobrev.
 - **`get_subject_rooms(student_id?: int, include_teachers? = True)`** —
   The child's subject rooms (ämnesrum) with their teachers. Each room's
   `activity_id` is the join key used across plannings, assignments and
