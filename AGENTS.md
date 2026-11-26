@@ -46,6 +46,7 @@ src/schoolsoft_mcp/
   server.py          # FastMCP server + tool registrations
   client.py          # SchoolSoftClient: httpx session, login, re-auth on 302
   config.py          # Settings.from_env() with validation
+  delivery.py        # save_to + upload_material: allowlist, public-IP guard
   models.py          # pydantic models returned by tools
   cache.py           # in-process grid/body cache, fingerprint + TTL
   parsers/
@@ -75,7 +76,8 @@ tests/
 | `get_planning`        | Stable       | High       | REST; body from planning_parts      |
 | `get_planning_detail` | Stable       | High       | Body, week lines and material       |
 | `read_material_text`  | Stable       | High       | Material by section_id + file_id    |
-| `download_material`   | Stable       | High       | Same file, raw bytes                |
+| `download_material`   | Stable       | High       | Same file, raw bytes ≤ 18 kB or save_to |
+| `upload_material`     | Stable       | High       | Same file to an allowlisted https URL |
 | `view_material_pages` | Stable       | High       | Pages as images; reads scans        |
 | `view_attachment_pages`| Stable      | Medium     | Same for news; no scanned news seen yet |
 | `get_subject_rooms`   | Stable       | High       | REST; the activity_id join key      |
@@ -194,8 +196,16 @@ sanitized `dump_page` output.
   `tests/fixtures/private/` is in `.gitignore` if you ever need a local
   scratch space.
 - This codebase touches credentials. **Do not** add telemetry, crash
-  reporting, or any third-party network call. The only outbound host
-  should be the configured SchoolSoft base URL.
+  reporting, or any third-party network call. The outbound hosts are the
+  configured SchoolSoft base URL and — only through `upload_material` —
+  hosts the operator listed in `SCHOOLSOFT_UPLOAD_ALLOWED_DOMAINS`.
+- `upload_material` can send a child's document anywhere on that list, so
+  its guard rails live in `delivery.py` and are not to be loosened: https
+  only, allowlist empty by default, every resolved address public (checked
+  in the network backend at connect time, so DNS cannot change between
+  check and connect), each redirect hop re-checked, never retried, and the
+  URL and headers never logged — upload URLs carry their key. Error
+  messages name the host, never the full URL.
 - If you spot an insecure pattern (HTML injection in `dump_page` output,
   credential logging, etc.), fix it in the same PR — don't defer.
 
