@@ -10,6 +10,43 @@ class ConfigError(Exception):
     """Raised when required configuration is missing or invalid."""
 
 
+def _domains_env(name: str) -> tuple[str, ...]:
+    """Host names from a comma- or space-separated list, lowercased.
+
+    A bare domain covers its subdomains too, so ``example.com`` admits
+    ``files.example.com``. A leading ``*.`` or ``.`` is accepted and means
+    the same thing.
+    """
+    raw = os.environ.get(name, "")
+    domains: list[str] = []
+    for token in raw.replace(",", " ").split():
+        domain = token.strip().lower().rstrip(".")
+        if domain.startswith("*."):
+            domain = domain[2:]
+        domain = domain.lstrip(".")
+        if not domain:
+            continue
+        if "/" in domain or ":" in domain or "@" in domain:
+            raise ConfigError(
+                f"{name} takes bare host names like 'example.com', got {token!r}"
+            )
+        domains.append(domain)
+    return tuple(dict.fromkeys(domains))
+
+
+def _dirs_env(name: str) -> tuple[str, ...]:
+    """Absolute directories from an ``os.pathsep``-separated list."""
+    raw = os.environ.get(name, "")
+    dirs: list[str] = []
+    for token in raw.split(os.pathsep):
+        token = token.strip()
+        if not token:
+            continue
+        path = os.path.expanduser(token)
+        if not os.path.isabs(path):
+            raise ConfigError(f"{name} must hold absolute paths, got {token!r}")
+        dirs.append(os.path.realpath(path))
+    return tuple(dict.fromkeys(dirs))
 
 
 def _seconds_env(name: str, default: float) -> float:
@@ -37,6 +74,11 @@ class Settings:
     # 0 disables. See cache.py for why these two and why these defaults.
     cache_grid_ttl: float = 600.0
     cache_body_ttl: float = 6 * 3600.0
+    # Hosts upload_material may send a file to. Empty — the default — means
+    # nowhere: the operator opts each recipient in by name.
+    upload_allowed_domains: tuple[str, ...] = ()
+    # Directories download_* may write to with ``save_to``. Empty disables it.
+    save_dirs: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -79,4 +121,6 @@ class Settings:
             base_url=base_url,
             cache_grid_ttl=_seconds_env("SCHOOLSOFT_CACHE_GRID_TTL", 600.0),
             cache_body_ttl=_seconds_env("SCHOOLSOFT_CACHE_BODY_TTL", 6 * 3600.0),
+            upload_allowed_domains=_domains_env("SCHOOLSOFT_UPLOAD_ALLOWED_DOMAINS"),
+            save_dirs=_dirs_env("SCHOOLSOFT_SAVE_DIRS"),
         )

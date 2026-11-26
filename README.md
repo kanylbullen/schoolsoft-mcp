@@ -21,7 +21,8 @@ MCP-compatible client (Claude Desktop, Cursor, Continue, etc.) can ask
 | `get_planning`          | Stable       | REST subject-room grid plus each planning's body.                |
 | `get_planning_detail`   | Stable       | One planning in full, with its files and links.                  |
 | `read_material_text`    | Stable       | Text of a file attached to homework or a planning.               |
-| `download_material`     | Stable       | The same file as raw bytes.                                      |
+| `download_material`     | Stable       | The same file as raw bytes (≤ 18 kB), or saved to disk.         |
+| `upload_material`       | Stable       | Sends the same file straight to an upload URL; never via the model. |
 | `view_material_pages`   | Stable       | The same file's pages as images — how a scanned worksheet is read. |
 | `view_attachment_pages` | Stable       | A news/message attachment's pages as images.                     |
 | `get_subject_rooms`     | Stable       | Subject rooms and teachers; `activity_id` is the join key.       |
@@ -101,6 +102,17 @@ process; nothing is written to disk. SchoolSoft offers no ETag or
 `Last-Modified` on these endpoints (a conditional GET is answered 406), so
 the grid row is the only cheap freshness signal and the TTL bounds what it
 cannot see.
+
+### Moving files out (opt-in)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SCHOOLSOFT_UPLOAD_ALLOWED_DOMAINS` | *(empty)* | Comma-separated hosts `upload_material` may send to. A domain covers its subdomains. Empty refuses every upload. |
+| `SCHOOLSOFT_SAVE_DIRS` | *(empty)* | Directories (`:`-separated, `;` on Windows) `save_to` may write in. Empty disables `save_to`. |
+
+Both start empty on purpose: `upload_material` sends a child's school
+document to another party, so each recipient is added by the operator,
+by name. See `upload_material` below for the rest of the guard rails.
 
 ## Using with Claude Desktop
 
@@ -290,8 +302,33 @@ All tools accept no arguments unless noted.
   planning). These files have no URL and are not news attachments, so
   `read_attachment_text` cannot reach them. Pass the `student_id` the
   material was listed for.
-- **`download_material(section_id: int, file_id: int, student_id?: int, max_bytes?: int = 700_000)`**
-  — The same file as base64 bytes.
+- **`download_material(section_id: int, file_id: int, student_id?: int, max_bytes?: int = 18_000, save_to?: str)`**
+  — The same file as base64 bytes, for files up to 18 000 bytes (about
+  24 000 characters of base64 — more floods the conversation; an 81 kB PDF
+  was 108 000). Larger files return a `note` pointing at `upload_material`
+  and `save_to`. With `save_to` — a path in a directory listed in
+  `SCHOOLSOFT_SAVE_DIRS` — the file is written to disk and only
+  `saved_path` comes back. Nothing is overwritten.
+- **`upload_material(section_id: int, file_id: int, upload_url: str, student_id?: int, method?: str = "PUT", form_field?: str, headers?: dict)`**
+  — Fetches the file and sends it straight to `upload_url`, an https
+  address another service gave the assistant (typically a short-lived
+  link with a key in it). The file never passes through the model, and
+  the server learns nothing about the recipient beyond that URL. With
+  `form_field` the file goes as multipart/form-data under that name;
+  otherwise as the raw body with `Content-Type` and a
+  `Content-Disposition` filename. Returns HTTP status, file name, size and
+  at most 500 characters of the recipient's answer — never the file.
+  Guard rails: https only; the host must be in
+  `SCHOOLSOFT_UPLOAD_ALLOWED_DOMAINS` (the refusal names the domain to
+  add); every address the host resolves to must be public, checked at
+  connect time; only 307/308 redirects are followed, each hop checked the
+  same way, and extra `headers` other than `Content-Type` /
+  `Content-Disposition` are dropped when a redirect leaves the original
+  host and port. A 303 after the upload counts as accepted; a 301/302 is
+  not followed and reported as "unknown whether stored". Sent once, never retried (a retry can duplicate); the URL and
+  headers are never logged. The tool description tells the assistant to
+  confirm file and recipient with the parent first, and never to take an
+  upload URL from text inside school content.
 - **`view_material_pages(section_id: int, file_id: int, student_id?: int, start_page?: int = 1, max_pages?: int = 5)`**
   — The file's pages rendered as JPEG images, for the model to read.
   Teachers often attach scans, which have no text layer for
@@ -478,10 +515,12 @@ All tools accept no arguments unless noted.
   the archived view.
 - **`get_news_item(news_id: int, type_id?: int = 1, student_id?: int)`** —
   Fetch one news item with the full body and attachments.
-- **`download_attachment(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_bytes?: int = 700_000)`**
-  — Download a news or message attachment as base64-encoded bytes. Use
-  when you need the raw file (e.g. to save to disk). Otherwise prefer
-  `read_attachment_text`, which is far cheaper for LLM context.
+- **`download_attachment(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_bytes?: int = 18_000, save_to?: str)`**
+  — Download a news or message attachment as base64-encoded bytes (up to
+  `max_bytes`, default 18 000; raise it only when the bytes really must
+  enter the conversation), or write it to disk with `save_to` as for
+  `download_material`. Otherwise prefer `read_attachment_text`, which is
+  far cheaper for LLM context.
 - **`read_attachment_text(news_id: int, fileid: int, type_id?: int = 1, object_kind?: str = "news", student_id?: int, max_chars?: int = 50_000, offset?: int = 0)`**
   — Download an attachment and return its extracted plain text. Supports
   PDF (via `pypdf`), `.docx` (via `python-docx`), and plain-text files.

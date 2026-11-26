@@ -602,11 +602,33 @@ class AttachmentBytes(BaseModel):
         description="Raw file bytes, base64-encoded. Decode before writing to disk. "
         "Empty when the file exceeded ``max_bytes`` — see ``note``.",
     )
+    saved_path: str | None = Field(
+        default=None,
+        description="Set when ``save_to`` was given: where the file was written. "
+        "``data_base64`` is then empty.",
+    )
     note: str | None = Field(
         default=None,
-        description="Populated when the download was skipped (e.g. file too large). "
-        "Try ``read_attachment_text`` for content, or pass a larger ``max_bytes``.",
+        description="Populated when the bytes were not returned (e.g. file too "
+        "large). Use ``save_to`` or ``upload_material`` to move the file, or "
+        "the matching ``read_*_text`` tool for its content.",
     )
+
+
+class UploadResult(BaseModel):
+    """What happened when a file was sent to an upload URL. Never the file itself."""
+
+    ok: bool = Field(description="True when the recipient answered 2xx, or 303 after storing the file.")
+    status_code: int = Field(description="The recipient's HTTP status.")
+    filename: str
+    content_type: str
+    size_bytes: int
+    recipient_host: str = Field(description="The host that finally answered.")
+    response_excerpt: str = Field(
+        default="",
+        description="The first 500 characters of the recipient's response body.",
+    )
+    note: str | None = None
 
 
 class AttachmentText(BaseModel):
