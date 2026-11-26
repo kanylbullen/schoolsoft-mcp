@@ -97,6 +97,12 @@ the variables into the spawned MCP server process.
 | `SCHOOLSOFT_CACHE_GRID_TTL` | `600` | Seconds to serve the plannings grid from memory. |
 | `SCHOOLSOFT_CACHE_BODY_TTL` | `21600` | Seconds to serve a planning body from memory, unless its grid row changes first. |
 
+Set either to `0` to disable that layer. The cache lives in the server
+process; nothing is written to disk. SchoolSoft offers no ETag or
+`Last-Modified` on these endpoints (a conditional GET is answered 406), so
+the grid row is the only cheap freshness signal and the TTL bounds what it
+cannot see.
+
 ### Moving files out (opt-in)
 
 | Variable | Default | Meaning |
@@ -107,14 +113,6 @@ the variables into the spawned MCP server process.
 Both start empty on purpose: `upload_material` sends a child's school
 document to another party, so each recipient is added by the operator,
 by name. See `upload_material` below for the rest of the guard rails.
-
-### Caching
-
-Set either to `0` to disable that layer. The cache lives in the server
-process; nothing is written to disk. SchoolSoft offers no ETag or
-`Last-Modified` on these endpoints (a conditional GET is answered 406), so
-the grid row is the only cheap freshness signal and the TTL bounds what it
-cannot see.
 
 ## Using with Claude Desktop
 

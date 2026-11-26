@@ -618,7 +618,7 @@ class AttachmentBytes(BaseModel):
 class UploadResult(BaseModel):
     """What happened when a file was sent to an upload URL. Never the file itself."""
 
-    ok: bool = Field(description="True when the recipient answered 2xx.")
+    ok: bool = Field(description="True when the recipient answered 2xx, or 303 after storing the file.")
     status_code: int = Field(description="The recipient's HTTP status.")
     filename: str
     content_type: str

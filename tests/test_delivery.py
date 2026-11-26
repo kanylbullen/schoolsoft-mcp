@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import socket
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpcore
@@ -283,6 +284,37 @@ async def test_a_connect_timeout_tries_the_next_address(monkeypatch: pytest.Monk
     assert tried == ["93.184.216.34", "93.184.216.35"]
 
 
+async def test_a_malformed_redirect_location_is_an_upload_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # httpx rejects the header itself, so it never reaches our own join().
+    route_to_receiver(monkeypatch)
+    with (
+        run_receiver({"/go": "https://[::1"}) as rx,
+        pytest.raises(delivery.UploadFailed, match="Could not send"),
+    ):
+        await _send(rx.url("/go"), rx.ssl_context())
+    assert rx.received == []
+
+
+class _CutOffResponse:
+    charset_encoding = None
+
+    def __init__(self, first: bytes | None) -> None:
+        self._first = first
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        if self._first:
+            yield self._first
+        raise httpx.ReadError("connection dropped")
+
+
+@pytest.mark.parametrize(("first", "expected"), [(b"stored", "stored"), (None, "could not be read")])
+async def test_a_cut_off_answer_body_keeps_the_status(first: bytes | None, expected: str) -> None:
+    excerpt = await delivery._read_excerpt(_CutOffResponse(first))  # type: ignore[arg-type]
+    assert expected in excerpt
+
+
 def test_errors_never_carry_a_url() -> None:
     err = httpx.ConnectError("failed for https://other.example.test/up?sig=SECRET now")
     text = delivery._describe(err)
@@ -297,6 +329,8 @@ def test_errors_never_carry_a_url() -> None:
         ({"headers": {"Host": "x"}}, "cannot be overridden"),
         ({"headers": {"x-a": "1\r\nx-b: 2"}}, "invalid"),
         ({"form_field": "file", "headers": {"Content-Type": "x/y"}}, "multipart"),
+        ({"headers": {"bad name": "v"}}, "invalid"),
+        ({"headers": {"x-key": "v\x00"}}, "invalid"),
     ],
 )
 async def test_bad_arguments_send_nothing(kw: dict[str, object], fragment: str) -> None:
@@ -326,9 +360,49 @@ def test_save_to_relative_lands_in_the_first_dir(tmp_path: Path) -> None:
 def test_save_to_outside_is_refused(tmp_path: Path, save_to: str) -> None:
     root = tmp_path / "root"
     root.mkdir()
-    (root / "link").symlink_to(tmp_path)
+    try:
+        (root / "link").symlink_to(tmp_path)
+    except OSError:  # Windows without developer mode
+        if save_to.startswith("link"):
+            pytest.skip("symlinks not available")
     with pytest.raises(delivery.DeliveryRefused, match="SCHOOLSOFT_SAVE_DIRS"):
         delivery.save_path(save_to, "x.pdf", (str(root),))
+
+
+def test_save_to_with_a_nul_character_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(delivery.DeliveryRefused, match="NUL"):
+        delivery.save_path("a\x00b.pdf", "x.pdf", (str(tmp_path),))
+
+
+def test_a_symlinked_allowed_dir_still_matches(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real)
+    except OSError:
+        pytest.skip("symlinks not available")
+    target = delivery.save_path("x.pdf", "f.pdf", (str(link),))
+    assert target == real / "x.pdf"
+    delivery.write_new_file(target, b"data", (str(link),))
+    assert target.read_bytes() == b"data"
+
+
+def test_a_failed_write_leaves_no_half_file_to_block_the_retry(tmp_path: Path) -> None:
+    target = tmp_path / "x.pdf"
+    with pytest.raises(TypeError):
+        delivery.write_new_file(target, "not bytes", (str(tmp_path),))  # type: ignore[arg-type]
+    assert not target.exists()
+    delivery.write_new_file(target, b"ok", (str(tmp_path),))
+    assert target.read_bytes() == b"ok"
+
+
+def test_a_failed_write_never_deletes_an_existing_file(tmp_path: Path) -> None:
+    target = tmp_path / "x.pdf"
+    target.write_bytes(b"keep")
+    with pytest.raises(delivery.DeliveryRefused, match="already exists"):
+        delivery.write_new_file(target, b"new", (str(tmp_path),))
+    assert target.read_bytes() == b"keep"
 
 
 def test_save_to_is_off_without_dirs() -> None:

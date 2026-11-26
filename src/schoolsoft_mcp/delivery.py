@@ -15,6 +15,7 @@ The URL and headers are never logged: upload URLs usually carry their key.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import ipaddress
 import logging
@@ -249,12 +250,17 @@ def content_disposition(filename: str) -> str:
     )
 
 
+# RFC 9110 token for names; no control characters in values (tab is allowed).
+_HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_HEADER_VALUE_BAD = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+
+
 def _clean_headers(headers: dict[str, str] | None, *, multipart: bool) -> dict[str, str]:
     cleaned: dict[str, str] = {}
     for name, value in (headers or {}).items():
         key = str(name).strip()
         lowered = key.lower()
-        if not key or any(c in key for c in "\r\n:") or any(c in str(value) for c in "\r\n"):
+        if not _HEADER_NAME.fullmatch(key) or _HEADER_VALUE_BAD.search(str(value)):
             raise DeliveryRefused("headers contain an invalid name or value")
         if lowered in _RESERVED_HEADERS:
             raise DeliveryRefused(f"header {key!r} is set by the server and cannot be overridden")
@@ -296,10 +302,17 @@ def _build_request(
 
 async def _read_excerpt(response: httpx.Response) -> str:
     collected = bytearray()
-    async for chunk in response.aiter_bytes():
-        collected.extend(chunk)
-        if len(collected) >= _RESPONSE_READ_LIMIT:
-            break
+    try:
+        async for chunk in response.aiter_bytes():
+            collected.extend(chunk)
+            if len(collected) >= _RESPONSE_READ_LIMIT:
+                break
+    except httpx.HTTPError:
+        # The status line has arrived, so the file did too. A stalled or cut-off
+        # answer body must not turn that into an error that says it "may not
+        # have arrived" and drops the status.
+        if not collected:
+            return "(the recipient's answer could not be read)"
     encoding = response.charset_encoding or "utf-8"
     try:
         text = bytes(collected).decode(encoding, errors="replace")
@@ -441,13 +454,17 @@ def save_path(save_to: str, filename: str, allowed_dirs: tuple[str, ...]) -> Pat
     raw = save_to.strip()
     if not raw:
         raise DeliveryRefused("save_to is empty")
+    if "\x00" in raw:
+        raise DeliveryRefused("save_to contains a NUL character")
     candidate = Path(os.path.expanduser(raw))
     if not candidate.is_absolute():
         candidate = Path(allowed_dirs[0]) / candidate
     if raw.endswith(("/", os.sep)) or candidate.is_dir():
         candidate = candidate / safe_filename(filename)
     resolved = Path(os.path.realpath(candidate))
-    roots = [Path(d) for d in allowed_dirs]
+    # realpath on the roots too: the settings already do it, but a caller that
+    # builds Settings by hand (or a symlinked temp dir) would otherwise never match.
+    roots = [Path(os.path.realpath(d)) for d in allowed_dirs]
     if not any(resolved.is_relative_to(root) and resolved != root for root in roots):
         raise DeliveryRefused(
             "save_to must be inside one of the directories in SCHOOLSOFT_SAVE_DIRS: "
@@ -462,17 +479,25 @@ def write_new_file(path: Path, content: bytes, allowed_dirs: tuple[str, ...]) ->
     ``xb`` refuses an existing file — and an existing symlink — so a saved
     file never overwrites anything, here or wherever a link points.
     """
-    roots = [Path(d) for d in allowed_dirs]
+    roots = [Path(os.path.realpath(d)) for d in allowed_dirs]
     root = next(r for r in roots if path.is_relative_to(r))
     if not root.is_dir():
         raise DeliveryRefused(f"The save directory {root} does not exist")
     path.parent.mkdir(parents=True, exist_ok=True)
     if not Path(os.path.realpath(path.parent)).is_relative_to(root):
         raise DeliveryRefused("save_to escapes the allowed directory")
+    created = False
     try:
         with open(path, "xb") as handle:
+            created = True
             handle.write(content)
     except FileExistsError:
         raise DeliveryRefused(
             f"{path} already exists; pass another save_to (nothing is overwritten)"
         ) from None
+    except BaseException:
+        # A half-written file would make every retry fail with "already exists".
+        if created:
+            with contextlib.suppress(OSError):
+                path.unlink()
+        raise
